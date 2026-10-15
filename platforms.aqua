@@ -1,0 +1,1 @@
+變數 Libraries = {"windows":"/runtimes/windows/aqua_opencv.dll", "linux":"/runtimes/portable/opencv.mjs", "macos":"/runtimes/portable/opencv.mjs", "web":"/runtimes/portable/opencv.mjs", "android":"libaqua_opencv.so"};
