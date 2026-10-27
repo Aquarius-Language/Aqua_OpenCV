@@ -1,0 +1,73 @@
+diff --git a/cmake/vars/OPENCV_DISABLE_THREAD_SUPPORT.cmake b/cmake/vars/OPENCV_DISABLE_THREAD_SUPPORT.cmake
+index 5f5fc02..7f71588 100644
+--- a/cmake/vars/OPENCV_DISABLE_THREAD_SUPPORT.cmake
++++ b/cmake/vars/OPENCV_DISABLE_THREAD_SUPPORT.cmake
+@@ -4,7 +4,9 @@ ocv_update(HAVE_PTHREAD 0)
+ 
+ # There components are disabled because they require
+ # multi-threaded execution.
+-ocv_update(WITH_PROTOBUF OFF)
++if(NOT AQUA_TARGET STREQUAL "web")
++  ocv_update(WITH_PROTOBUF OFF)
++endif()
+ ocv_update(WITH_GSTREAMER OFF)
+ ocv_update(WITH_IPP OFF)
+ ocv_update(WITH_ITT OFF)
+@@ -21,8 +23,10 @@ ocv_update(BUILD_opencv_java OFF)
+ # These modules require `#include
+ # <[thread|mutex|condition_variable|future]>` and linkage into
+ # `libpthread` to work.
+-ocv_update(BUILD_opencv_objdetect OFF)
++if(NOT AQUA_TARGET STREQUAL "web")
++  ocv_update(BUILD_opencv_objdetect OFF)
++  ocv_update(BUILD_opencv_dnn OFF)
++endif()
+ ocv_update(BUILD_opencv_gapi OFF)
+-ocv_update(BUILD_opencv_dnn OFF)
+ 
+ set(OPJ_USE_THREAD "OFF" CACHE INTERNAL "")
+diff --git a/modules/core/include/opencv2/core/utility.hpp b/modules/core/include/opencv2/core/utility.hpp
+index cfe9840..183dc6e 100644
+--- a/modules/core/include/opencv2/core/utility.hpp
++++ b/modules/core/include/opencv2/core/utility.hpp
+@@ -791,12 +791,16 @@ typedef std::lock_guard<cv::Mutex> AutoLock;
+ // Custom (failing) implementation of `std::recursive_mutex`.
+ struct Mutex {
+     void lock(){
++#if !defined(__wasi__)
+         CV_Error(cv::Error::StsNotImplemented,
+                  "cv::Mutex is disabled by OPENCV_DISABLE_THREAD_SUPPORT=ON");
++#endif
+     }
+     void unlock(){
++#if !defined(__wasi__)
+         CV_Error(cv::Error::StsNotImplemented,
+                  "cv::Mutex is disabled by OPENCV_DISABLE_THREAD_SUPPORT=ON");
++#endif
+     }
+ };
+ // Stub for cv::AutoLock when threads are disabled.
+diff --git a/modules/calib3d/src/stereo_geom.cpp b/modules/calib3d/src/stereo_geom.cpp
+index 4c91522..e8da6a4 100644
+--- a/modules/calib3d/src/stereo_geom.cpp
++++ b/modules/calib3d/src/stereo_geom.cpp
+@@ -3,6 +3,7 @@
+ // of this distribution and at http://opencv.org/license.html
+ 
+ #include "precomp.hpp"
++#include <iterator>
+ 
+ namespace cv {
+ 
+diff --git a/modules/core/src/parallel/plugin_parallel_wrapper.impl.hpp b/modules/core/src/parallel/plugin_parallel_wrapper.impl.hpp
+index b9b3105..21c398e 100644
+--- a/modules/core/src/parallel/plugin_parallel_wrapper.impl.hpp
++++ b/modules/core/src/parallel/plugin_parallel_wrapper.impl.hpp
+@@ -10,6 +10,7 @@
+ // Dynamic backend implementation
+ 
+ #include "opencv2/core/utils/plugin_loader.private.hpp"
++#include <iterator>
+ 
+ namespace cv { namespace impl {
+ 

@@ -1,0 +1,23 @@
+var cv=import("OpenCVNative");
+var json=import("Serialization");
+var network=import("Network");
+var command=function(request){return json.ParseJson(cv.Command(json.Json(request)));};
+var a=command({"op":"open"})["value"];
+var b=command({"op":"open"})["value"];
+var checks=0;
+var rejects=function(callback){checks+=1;if(network.Try(callback).Success){print("OpenCV invalid input accepted",checks);InvalidInputAccepted;}};
+rejects(function(){cv.FromRGBA(a,0,1,[]);});
+rejects(function(){cv.FromRGBA(a,1,1,[1,2,3]);});
+rejects(function(){cv.FromRGBA(a,1,1,[0,256,0,255]);});
+rejects(function(){cv.FromRGBA(a,1,1,[0,-1,0,255]);});
+rejects(function(){cv.Upload(a,1,[1,2,3,4]);});
+var image=cv.FromRGBA(a,1,1,[17,34,51,255]);
+var pixels=cv.Pixels(a,image);
+if(json.Json(pixels)!="[17,34,51,255]"){PixelRoundtripFailed;}
+rejects(function(){cv.Pixels(b,image);});
+var invalid=command({"op":"apply","session":a,"image":image,"feature":"grabcut","parameters":{}});
+if(invalid["ok"]){OpenCVExceptionWasNotReported;}
+command({"op":"close","session":a});
+rejects(function(){cv.Pixels(a,image);});
+command({"op":"close","session":b});
+print("OPENCV_SDK_VALIDATION_OK",checks);

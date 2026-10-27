@@ -1,4 +1,9 @@
-build*/
+/build/
+/dist/
+/native/vendor/opencv-4.12.0/
+/native/windows-*/
+/native/linux-*/
+/native/android-*/
+/native/web/
 node_modules/
-dist/
 aqua.lock.json

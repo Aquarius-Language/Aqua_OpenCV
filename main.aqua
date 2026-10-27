@@ -1,24 +1,13 @@
-變數 Dynamic = 匯入("DynamicLibrary");
 變數 JSON = 匯入("Serialization");
 變數 Files = 匯入("Files");
 變數 Images = 匯入("Images");
 變數 Arrays = 匯入("Array");
 變數 Math = 匯入("Processing");
-變數 Platforms = 匯入(目前工作目錄 + "/platforms.aqua");
-變數 PlatformPaths = Platforms.Libraries;
-變數 LibraryPath=PlatformPaths[Dynamic.Platform];
-如果(Dynamic.Platform!="android" || LibraryPath!="libaqua_opencv.so"){LibraryPath=目前工作目錄+LibraryPath;}
-變數 Engine = Dynamic.Load(LibraryPath);
-變數 UseNative = !Engine.HasSymbol("cv_write");
-變數 Session = (JSON.ParseJson(Engine.Call("cv_command", JSON.Json({"op":"open"}))))["value"];
+變數 Engine = 匯入("OpenCVNative");
+變數 UseNative = !是網頁();
+變數 Session = JSON.ParseJson(Engine.Command(JSON.Json({"op":"open"})))["value"];
 變數 Closed = 假;
-變數 Command = 函式(request) { request["session"] = Session; 回傳 JSON.ParseJson(Engine.Call("cv_command", JSON.Json(request))); };
-變數 Bytes32 = 函式(id) {
-    變數 bytes = [];
-    迴圈(變數 i=0;i<4;i++){變數 b=id-Math.floor(id/256.0d)*256;Arrays.Append(bytes,b);id=(id-b)/256;}
-    回傳 bytes;
-};
-
+變數 Command = 函式(request) { request["session"] = Session; 回傳 JSON.ParseJson(Engine.Command(JSON.Json(request))); };
 # Public feature names are accepted in either language on every backend.
 變數 FeatureNames = [["gray", "灰階"], ["hsv", "HSV色彩空間"], ["gaussian", "高斯模糊"], ["median", "中值濾波"], ["bilateral", "雙邊濾波"], ["canny", "Canny邊緣"], ["sobel", "Sobel梯度"], ["laplacian", "Laplacian邊緣"], ["threshold", "二值化"], ["adaptive", "自適應二值化"], ["otsu", "Otsu二值化"], ["erode", "侵蝕"], ["dilate", "膨脹"], ["open", "開運算"], ["close", "閉運算"], ["gradient", "形態學梯度"], ["equalize", "直方圖等化"], ["clahe", "局部對比增強"], ["colormap", "偽彩色映射"], ["resize", "調整影像大小"], ["rotate", "仿射旋轉"], ["perspective", "透視轉換"], ["contours", "輪廓偵測"], ["hough_lines", "霍夫直線"], ["hough_circles", "霍夫圓形"], ["corners", "角點偵測"], ["orb", "ORB特徵"], ["sift", "SIFT特徵"], ["matching", "特徵匹配"], ["template", "樣板匹配"], ["watershed", "分水嶺分割"], ["grabcut", "GrabCut前景"], ["kmeans", "K平均量化"], ["dft", "傅立葉頻譜"], ["inpaint", "影像修補"], ["denoise", "非局部均值去噪"], ["optical_flow", "稠密光流"], ["background", "背景相減"], ["face", "人臉偵測"], ["qr", "QR碼編解碼"], ["stereo", "立體視差"], ["homography", "單應性估計"], ["calibration", "相機姿態估計"], ["stitching", "全景拼接"], ["dnn", "神經網路人臉"]];
 變數 功能名稱 = FeatureNames;
@@ -65,40 +54,27 @@
 
 變數 Capabilities, 功能支援 = 函式() { 變數 資料=補齊中文欄位(Command({"op":"info"})["value"]);變數 功能=[];
     迴圈(變數 序號=0;序號<長度(功能名稱);序號++){變數 對照=功能名稱[序號];如果(Arrays.Contains(資料["features"],對照[0])){Arrays.Append(功能,對照[1]);}}
-    資料["功能"]=功能;資料["後端"]="OpenCV.js / WebAssembly SIMD128";如果(UseNative){資料["後端"]="原生 C++ / SIMD 指令派送 / 平行運算";}回傳 資料; };
+    資料["功能"]=功能;資料["後端"]="C++ / WebAssembly side module";如果(UseNative){資料["後端"]="原生 C++ / SIMD 指令派送 / 平行運算";}回傳 資料; };
 變數 Configure, 設定 = 函式(threads) { 變數 回應=Command({"op":"configure","threads":threads});回應["成功"]=回應["ok"];回應["結果"]=回應["value"];如果(!回應["ok"]){回應["錯誤"]="執行緒數必須介於 1 到 256。";回應["診斷"]=回應["error"];}回傳 回應; };
 變數 Sample, 範例影像 = 函式(frame) { 回傳 Command({"op":"sample","frame":frame})["value"]; };
 變數 Inspect, 檢查 = 函式(image) { 回傳 補齊中文欄位(Command({"op":"inspect","image":image})["value"]); };
 變數 Apply, 處理 = 函式(image, feature, parameters) { 回傳 雙語結果(Command({"op":"apply","image":image,"feature":英文功能(feature),"parameters":中文參數(parameters)})); };
 變數 Release, 釋放影像 = 函式(image) { 變數 回應=Command({"op":"release","image":image});回應["成功"]=回應["ok"];回應["結果"]=回應["value"];如果(!回應["ok"]){回應["錯誤"]="無法釋放影像，請確認影像代碼仍有效。";回應["診斷"]=回應["error"];}回傳 回應; };
 變數 Decode, 解碼 = 函式(bytes) {
-    如果(UseNative){
-        變數 input = Bytes32(Session); Arrays.AppendArray(input, bytes);
-        變數 id = Engine.Invoke("cv_decode", input);
-        回傳 id[0] + id[1]*256 + id[2]*65536 + id[3]*16777216;
-    }
-    變數 decoded=Images.Decode(bytes,0);
-    變數 id=Command({"op":"rgba","width":decoded.width,"height":decoded.height})["value"];
-    變數 pixels=decoded.Pixels();
-    迴圈(變數 offset=0;offset<長度(pixels);offset+=1048560){
-        變數 count=長度(pixels)-offset;如果(count>1048560){count=1048560;}
-        變數 input=Bytes32(Session);Arrays.AppendArray(input,Bytes32(id));Arrays.AppendArray(input,Bytes32(offset));Arrays.AppendArray(input,Arrays.Slice(pixels,offset,offset+count));Engine.Invoke("cv_write",input);
-    }
-    回傳 id;
+    變數 decoded = Images.Decode(bytes,0);
+    變數 result = Engine.FromRGBA(Session,decoded.width,decoded.height,decoded.Pixels());
+    回傳 result;
 };
-變數 Load, 載入 = 函式(path) { 回傳 Decode(Files.ReadAssetBytes(path)); };
+變數 Load, 載入 = 函式(path) { Decode(Files.ReadAssetBytes(path)); };
 變數 EncodePNG, 編碼PNG = 函式(image) {
-    如果(UseNative){變數 input=Bytes32(Session);Arrays.AppendArray(input,Bytes32(image));回傳 Engine.Invoke("cv_png",input);}
-    變數 dimensions=Inspect(image);變數 length=dimensions["width"]*dimensions["height"]*4;變數 pixels=[];
-    迴圈(變數 offset=0;offset<length;offset+=1048576){
-        變數 count=length-offset;如果(count>1048576){count=1048576;}
-        變數 input=Bytes32(Session);Arrays.AppendArray(input,Bytes32(image));Arrays.AppendArray(input,Bytes32(offset));Arrays.AppendArray(input,Bytes32(count));Arrays.AppendArray(pixels,Engine.Invoke("cv_pixels",input));
-    }
-    回傳 Images.Encode(Images.Create(dimensions["width"],dimensions["height"],pixels),"Png",{});
+    變數 dimensions = Inspect(image);
+    變數 rgba = Images.Create(dimensions["width"],dimensions["height"],Engine.Pixels(Session,image));
+    變數 result = Images.Encode(rgba,"Png",{});
+    回傳 result;
 };
-變數 Upload = 函式(kind,path) { 變數 input=Bytes32(Session);Arrays.Append(input,kind);Arrays.AppendArray(input,Files.ReadAssetBytes(path));回傳 Engine.Invoke("cv_upload",input); };
-變數 LoadCascade, 載入人臉分類器 = 函式(path) { 回傳 Upload(1,path); };
-變數 LoadYuNet, 載入神經網路 = 函式(path) { 回傳 Upload(2,path); };
+變數 Upload = 函式(kind,path) { Engine.Upload(Session,kind,Files.ReadAssetBytes(path)); };
+變數 LoadCascade, 載入人臉分類器 = 函式(path) { Upload(1,path); };
+變數 LoadYuNet, 載入神經網路 = 函式(path) { Upload(2,path); };
 變數 Preview, 預覽 = 函式(image) {
     變數 Window=匯入("Window");變數 dimensions=Inspect(image);變數 preview=image;變數 temporary=假;
     如果(dimensions["width"]>480 || dimensions["height"]>300){
@@ -107,7 +83,7 @@
     }
     變數 result=Window.ToProcessingImage(Images.Decode(EncodePNG(preview),0));如果(temporary){Release(preview);}回傳 result;
 };
-變數 Dispose, 釋放 = 函式() { 如果(!Closed){Command({"op":"close"});Engine.Dispose();Closed=真;} };
+變數 Dispose, 釋放 = 函式() { 如果(!Closed){Command({"op":"close"});Closed=真;} };
 
 # Convenience functions share the same bilingual Apply result and parameter map.
 變數 Grayscale, 灰階 = 函式(影像, 參數) { 回傳 處理(影像,"gray",參數); };

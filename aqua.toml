@@ -1,25 +1,15 @@
-manifest_version = 1
-[project]
-name = "Aqua_OpenCV"
-type = "library"
-version = "1.1.1"
-entry = "main.aqua"
-sources = ["main.aqua", "platforms.aqua"]
-platforms = ["windows", "linux", "macos", "web", "android"]
-license = "Apache-2.0"
-description = "English and 繁體中文 OpenCV API with native C++ matrix handles and SIMD WebAssembly."
+manifest_version = 2
+[library]
+name="Aqua_OpenCV"
+version="2.0.0"
+platforms=["windows","linux","web","android"]
+license="Apache-2.0"
+[native]
+name="opencv"
+modules=["OpenCVNative|電腦視覺原生"]
+source="native"
+[[modules]]
+names="OpenCV|電腦視覺"
+source="main.aqua"
 [[assets]]
-source = "assets"
-[[assets]]
-source = "licenses"
-[[assets]]
-source = "runtimes/windows"
-platforms = ["windows"]
-[[assets]]
-source = "runtimes/portable/opencv.mjs"
-platforms = ["web", "linux", "macos"]
-
-[[assets]]
-source = "runtimes/android"
-target = "native/android"
-platforms = ["android"]
+source="assets"
