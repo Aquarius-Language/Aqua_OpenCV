@@ -1,15 +1,13 @@
 manifest_version = 2
 [library]
-name="Aqua_OpenCV"
-version="2.0.0"
-platforms=["windows","linux","web","android"]
-license="Apache-2.0"
+name = "Aqua_OpenCV"
+version = "3.0.0"
+platforms = ["windows", "linux", "web", "android"]
+license = "Apache-2.0"
+description = "OpenCV 4.12 for AquariusLang with OpenCV's own API: Mat objects, cv2 function names and constants, 繁體中文 aliases."
 [native]
-name="opencv"
-modules=["OpenCVNative|電腦視覺原生"]
-source="native"
-[[modules]]
-names="OpenCV|電腦視覺"
-source="main.aqua"
+name = "opencv"
+modules = ["OpenCV|cv|電腦視覺"]
+source = "native"
 [[assets]]
-source="assets"
+source = "assets"

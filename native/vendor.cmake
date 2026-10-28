@@ -13,9 +13,13 @@ if(NOT EXISTS "${opencv_source}/CMakeLists.txt")
 endif()
 find_package(Git REQUIRED)
 set(opencv_patch "${CMAKE_CURRENT_LIST_DIR}/vendor/opencv-wasi.patch")
-execute_process(COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${opencv_patch}"
+# The ceiling stops git from treating the source as part of an enclosing repository, where it skips the patch silently;
+# whitespace is ignored so a tree patched on Windows (CRLF) is recognized on Linux and the other way round.
+set(git_apply "${CMAKE_COMMAND}" -E env "GIT_CEILING_DIRECTORIES=${CMAKE_CURRENT_LIST_DIR}/vendor" "${GIT_EXECUTABLE}" -c core.autocrlf=false
+    apply --ignore-whitespace)
+execute_process(COMMAND ${git_apply} --reverse --check "${opencv_patch}"
     WORKING_DIRECTORY "${opencv_source}" RESULT_VARIABLE applied OUTPUT_QUIET ERROR_QUIET)
 if(NOT applied EQUAL 0)
-    execute_process(COMMAND "${GIT_EXECUTABLE}" apply "${opencv_patch}"
+    execute_process(COMMAND ${git_apply} "${opencv_patch}"
         WORKING_DIRECTORY "${opencv_source}" COMMAND_ERROR_IS_FATAL ANY)
 endif()

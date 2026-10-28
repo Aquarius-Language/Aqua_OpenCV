@@ -1,0 +1,30 @@
+# Runs every lab for a few frames on the scene and on a photo without a window, and prints its notes.
+# aqua run . --entry check.aqua
+# 不開視窗，在場景與照片上執行每個實驗室數個影格並印出結果。
+var cv = import("cv");
+var S = import("String");
+var scene = import("scene.aqua");
+var labs = import("labs.aqua");
+
+var portraitImage = cv.imread("/bottles/Aqua_OpenCV/assets/portrait.jpg");
+var portrait = cv.resize(portraitImage, [640, 360]);
+var photo = cv.resize(cv.imread("assets/fruits.jpg"), [640, 360]);
+var failures = 0;
+for (var i = 0; i < len(labs.all); i++) {
+    var lab = labs.all[i];
+    var store = {"portraitStill": portrait, "portraitFrame": portrait};
+    for (var f = 0; f < 4; f++) {
+        var source = "scene";
+        var frame = scene.render(f * 0.2d);
+        if (f == 3) { source = "photo"; frame = photo.clone(); }
+        var c = labs.Ctx(frame, f * 0.2d, f / 3.0d, -1, 320, 180, f == 1, f == 1, f == 2, false, f % 2 == 1, store, f == 0, source);
+        var start = currentTime();
+        var result = lab.run(c);
+        var ms = currentTime() - start;
+        if (result.image.rows < 1) { failures++; print("EMPTY", lab.key); }
+        if (f == 3) { print(lab.key, S.From(result.image.cols) + "x" + S.From(result.image.rows), S.From(int(ms)) + " ms", S.Join(result.notes, " | ")); }
+        labs.flush();
+        frame.delete();
+    }
+}
+print("LABS_CHECKED", len(labs.all), "failures", failures);

@@ -1,0 +1,6 @@
+# Runs every test file of the OpenCV binding; each prints its checks and fails on the first wrong result.
+var core = import("core.aqua");
+var imgproc = import("imgproc.aqua");
+var analysis = import("analysis.aqua");
+var bilingual = import("bilingual.aqua");
+print("OPENCV_API_TESTS_OK", core.count + imgproc.count + analysis.count + bilingual.count);

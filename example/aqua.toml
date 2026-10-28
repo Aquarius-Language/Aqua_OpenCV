@@ -1,0 +1,17 @@
+manifest_version = 2
+
+[project]
+name = "Aqua_OpenCV_Example"
+version = "1.0.0"
+entry = "main.aqua"
+sources = ["main.aqua", "labs.aqua", "scene.aqua"]
+platforms = ["windows", "linux", "web", "android"]
+license = "Apache-2.0"
+description = "Aqua × OpenCV Vision Lab: 26 interactive OpenCV labs in English and 繁體中文."
+
+[dependencies]
+[dependencies.Aqua_OpenCV]
+version = "3.0.0"
+path = "../aqua.toml"
+[[assets]]
+source = "assets"

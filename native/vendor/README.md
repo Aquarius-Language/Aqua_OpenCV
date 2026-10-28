@@ -5,11 +5,9 @@ and applies opencv-wasi.patch: explicit iterator includes for current libc++; en
 algorithms without background threads on WASI; no-op cv::Mutex in that single-threaded build.
 DetectionBasedTracker is excluded on the web because its background worker is outside this binding's API.
 
-nlohmann/json 3.12.0: vendor/nlohmann/json.hpp, MIT license in the header.
-SHA-256: aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63
-
 LLVM 23.1.3: https://github.com/llvm/llvm-project/archive/refs/tags/llvmorg-23.1.3.tar.gz
 Source archive SHA-256: 791b560dee8f65fdf7b19ad5db0b4ac627467824d8b687957d8a437b806103f0
 llvm-project-23.1.3 contains the libc++abi/libunwind sources and libc++ internal headers needed by
-wasm-exceptions.cmake. Their LICENSE.TXT files are retained. The exception runtime is private to this side module;
+wasm-exceptions.cmake. Their LICENSE.TXT files are retained. The web build also enables WebAssembly setjmp/longjmp
+(libjpeg and libpng error handling) and links the pinned WASI sysroot's libsetjmp privately. The exception runtime is private to this side module;
 it does not replace AquariusLang's shared runtime or its libc++.

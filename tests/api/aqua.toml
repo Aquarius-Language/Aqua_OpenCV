@@ -1,0 +1,11 @@
+manifest_version = 2
+[project]
+name = "OpenCV_API_Tests"
+version = "1.0.0"
+entry = "main.aqua"
+sources = ["main.aqua", "core.aqua", "imgproc.aqua", "analysis.aqua", "bilingual.aqua"]
+platforms = ["windows", "linux", "web", "android"]
+[dependencies]
+[dependencies.Aqua_OpenCV]
+version = "3.0.0"
+path = "../../aqua.toml"

@@ -1,0 +1,138 @@
+# features2d, calib3d, video, objdetect, dnn, ml and stitching.
+var cv = import("cv");
+var Arrays = import("Array");
+var count = 0;
+var check = function(ok, name) { count += 1; if (!ok) { print("OPENCV CHECK FAILED", name); OpenCVCheckFailed(); } };
+
+# A textured image and a shifted copy for features, flow and homographies.
+cv.setRNGSeed(7);
+var texture = cv.Mat(240, 320, cv.CV_8UC1, 0);
+cv.randu(texture, 0, 255);
+texture = cv.GaussianBlur(texture, [7, 7], 0);
+texture = cv.equalizeHist(texture);
+var moved = cv.warpAffine(texture, cv.Mat([[1, 0, 12], [0, 1, 7]]), [320, 240]);
+
+var orb = cv.ORB_create(500);
+var a = orb.detectAndCompute(texture);
+var b = orb.detectAndCompute(moved);
+check(len(a[0]) > 50 && a[1].cols == 32 && typeOf(orb) == "orb", "ORB detectAndCompute");
+check(a[0][0]["pt"][0] >= 0 && a[0][0]["size"] > 0, "KeyPoint properties");
+var matches = cv.BFMatcher(cv.NORM_HAMMING, true).match(a[1], b[1]);
+check(len(matches) > 30 && matches[0]["distance"] >= 0, "BFMatcher match");
+var from = [];
+var to = [];
+for (var i = 0; i < len(matches); i++) {
+    Arrays.Append(from, a[0][matches[i]["queryIdx"]]["pt"]);
+    Arrays.Append(to, b[0][matches[i]["trainIdx"]]["pt"]);
+}
+var h = cv.findHomography(from, to, cv.RANSAC, 3);
+check(h[0].at(0, 2) > 11 && h[0].at(0, 2) < 13 && h[0].at(1, 2) > 6 && h[0].at(1, 2) < 8, "findHomography");
+var affine = cv.estimateAffinePartial2D(from, to);
+check(affine[0].at(0, 2) > 11 && affine[0].at(0, 2) < 13, "estimateAffinePartial2D");
+check(cv.drawMatches(texture, a[0], moved, b[0], matches).cols == 640, "drawMatches");
+check(cv.drawKeypoints(texture, a[0], cv.None, [0, 255, 0], cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS).channels() == 3, "drawKeypoints");
+var sift = cv.SIFT_create(200);
+var s = sift.detectAndCompute(texture);
+var knn = cv.FlannBasedMatcher().knnMatch(s[1], sift.compute(moved, sift.detect(moved))[1], 2);
+check(len(knn) > 20 && len(knn[0]) == 2, "SIFT and FLANN knnMatch");
+check(len(cv.AKAZE_create().detect(texture)) > 10 && len(cv.BRISK_create().detect(texture)) > 10, "AKAZE, BRISK");
+check(len(cv.FastFeatureDetector_create(20).detect(texture)) > 10, "FAST");
+var blobs = cv.Mat(200, 200, cv.CV_8UC1, 255);
+cv.circle(blobs, [60, 60], 20, 0, -1);
+cv.circle(blobs, [140, 140], 25, 0, -1);
+check(len(cv.SimpleBlobDetector_create({"filterByArea": true, "minArea": 100}).detect(blobs)) == 2, "SimpleBlobDetector");
+check(len(cv.MSER_create().detectRegions(blobs)[0]) >= 1, "MSER");
+
+var flow = cv.calcOpticalFlowFarneback(texture, moved, cv.None, 0.5d, 3, 15, 3, 5, 1.2d, 0);
+check(flow.channels() == 2 && flow.at(120, 160)[0] > 10, "calcOpticalFlowFarneback");
+var tracked = cv.calcOpticalFlowPyrLK(texture, moved, [[160, 120], [100, 80]]);
+check(tracked[1][0] == 1 && tracked[0][0][0] > 171 && tracked[0][0][0] < 173, "calcOpticalFlowPyrLK");
+var mog = cv.createBackgroundSubtractorMOG2();
+mog.apply(texture);
+check(cv.countNonZero(mog.apply(moved)) > 1000 && typeOf(mog) == "backgroundsubtractormog2", "BackgroundSubtractorMOG2");
+var kalman = cv.KalmanFilter(4, 2);
+cv.matFromArray(4, 4, cv.CV_32F, [1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1]).copyTo(kalman.transitionMatrix);
+cv.eye(2, 4, cv.CV_32F).copyTo(kalman.measurementMatrix);
+cv.eye(4, 4, cv.CV_32F).convertTo(cv.CV_32F, 0.01d).copyTo(kalman.processNoiseCov);
+cv.eye(2, 2, cv.CV_32F).convertTo(cv.CV_32F, 0.1d).copyTo(kalman.measurementNoiseCov);
+for (var step = 0; step < 20; step++) { kalman.predict(); kalman.correct([step * 2, step]); }
+check(kalman.statePost.at(0, 0) > 30 && kalman.transitionMatrix.at(0, 2) == 1, "KalmanFilter");
+var tracker = cv.TrackerMIL_create();
+tracker.init(cv.cvtColor(texture, cv.COLOR_GRAY2BGR), [140, 100, 40, 40]);
+var update = tracker.update(cv.cvtColor(moved, cv.COLOR_GRAY2BGR));
+check(update[0] && update[1][0] > 145, "TrackerMIL");
+var hue = cv.Mat(100, 100, cv.CV_8UC1, 0);
+cv.circle(hue, [60, 50], 15, 255, -1);
+var window = cv.meanShift(hue, [30, 30, 30, 30], [cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_COUNT, 10, 1]);
+check(window[1][0] > 35, "meanShift");
+check(len(cv.CamShift(hue, [30, 30, 30, 30], [cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_COUNT, 10, 1])[0]) == 3, "CamShift");
+
+var objectPoints = [];
+for (var y = 0; y < 6; y++) { for (var x = 0; x < 9; x++) { Arrays.Append(objectPoints, [x, y, 0]); } }
+var camera = cv.Mat([[600, 0, 240], [0, 600, 150], [0, 0, 1]]);
+var projected = cv.projectPoints(objectPoints, cv.Mat([0.2d, 0.1d, 0.05d]), cv.Mat([-4, -2, 15]), camera, cv.None);
+var pose = cv.solvePnP(objectPoints, projected[0], camera, cv.None);
+check(pose[0] && pose[2].at(2, 0) > 14.9d && pose[2].at(2, 0) < 15.1d, "projectPoints and solvePnP");
+check(cv.Rodrigues(pose[1])[0].rows == 3, "Rodrigues");
+var board = cv.Mat(480, 640, cv.CV_8UC1, 255);
+for (var row = 0; row < 7; row++) {
+    for (var col = 0; col < 10; col++) {
+        if ((row + col) % 2 == 0) { cv.rectangle(board, [40 + col * 50, 40 + row * 50], [89 + col * 50, 89 + row * 50], 0, -1); }
+    }
+}
+var chess = cv.findChessboardCorners(board, [9, 6]);
+check(chess[0] && len(chess[1]) == 54, "findChessboardCorners");
+var calibrated = cv.calibrateCamera([objectPoints, objectPoints], [chess[1], chess[1]], [640, 480]);
+check(calibrated[1].rows == 3 && len(calibrated[3]) == 2, "calibrateCamera");
+check(cv.undistort(board, camera, cv.Mat([0.1d, 0, 0, 0, 0])).rows == 480, "undistort");
+var right = cv.warpAffine(texture, cv.Mat([[1, 0, -8], [0, 1, 0]]), [320, 240]);
+check(cv.StereoBM_create(64, 15).compute(texture, right).depth() == cv.CV_16S, "StereoBM");
+check(cv.StereoSGBM_create(0, 32, 5).compute(texture, right).rows == 240, "StereoSGBM");
+
+var face = cv.imread("/bottles/Aqua_OpenCV/assets/portrait.jpg");
+var cascade = cv.CascadeClassifier(cv.haarcascades + "haarcascade_frontalface_default.xml");
+var faces = cascade.detectMultiScale(cv.cvtColor(face, cv.COLOR_BGR2GRAY), 1.1d, 5);
+check(len(faces) >= 1 && len(faces[0]) == 4, "CascadeClassifier");
+var yunet = cv.FaceDetectorYN_create(cv.haarcascades + "face_detection_yunet_2023mar.onnx", "", [face.cols, face.rows]);
+var detected = yunet.detect(face);
+check(detected[1].rows >= 1 && detected[1].cols == 15, "FaceDetectorYN");
+var people = cv.HOGDescriptor();
+people.setSVMDetector(cv.HOGDescriptor_getDefaultPeopleDetector());
+check(len(people.detectMultiScale(cv.resize(face, [320, 240]))) == 2, "HOGDescriptor");
+var qrImage = cv.QRCodeEncoder_create().encode("https://opencv.org");
+qrImage = cv.resize(cv.copyMakeBorder(qrImage, 4, 4, 4, 4, cv.BORDER_CONSTANT, 255), [300, 300], 0, 0, cv.INTER_NEAREST);
+var qr = cv.QRCodeDetector().detectAndDecode(qrImage);
+check(qr[0] == "https://opencv.org" && len(qr[1]) == 4, "QRCodeEncoder and QRCodeDetector");
+var dictionary = cv.getPredefinedDictionary(cv.DICT_4X4_50);
+var marker = cv.copyMakeBorder(cv.generateImageMarker(dictionary, 7, 160), 40, 40, 40, 40, cv.BORDER_CONSTANT, 255);
+var aruco = cv.ArucoDetector(dictionary).detectMarkers(marker);
+check(len(aruco[1]) == 1 && aruco[1][0] == 7 && len(aruco[0][0]) == 4, "ArUco");
+check(cv.drawDetectedMarkers(cv.cvtColor(marker, cv.COLOR_GRAY2BGR), aruco[0], aruco[1]).channels() == 3, "drawDetectedMarkers");
+check(typeOf(cv.BarcodeDetector().detectAndDecode(marker)) == "array", "BarcodeDetector");
+
+var net = cv.readNet(cv.haarcascades + "face_detection_yunet_2023mar.onnx");
+check(!net.empty() && len(net.getUnconnectedOutLayersNames()) > 0, "readNet ONNX");
+var blob = cv.blobFromImage(face, 1.0d, [320, 320], [0, 0, 0], false, false);
+net.setInput(blob);
+var outputs = net.forward(net.getUnconnectedOutLayersNames());
+check(len(outputs) > 1 && blob.total() == 307200, "blobFromImage and forward");
+check(len(cv.NMSBoxes([[0, 0, 10, 10], [1, 1, 10, 10], [50, 50, 10, 10]], [0.9d, 0.8d, 0.7d], 0.5d, 0.4d)) == 2, "NMSBoxes");
+
+var samples = cv.Mat([[1, 1], [1, 2], [2, 1], [8, 8], [8, 9], [9, 8]]);
+var labels = cv.Mat([0, 0, 0, 1, 1, 1]);
+var knnModel = cv.KNearest_create();
+knnModel.train(samples, cv.ROW_SAMPLE, labels);
+check(knnModel.findNearest(cv.Mat([[7, 7]]), 3)[0] == 1, "KNearest");
+var svm = cv.SVM_create();
+svm.setKernel(cv.SVM_LINEAR);
+svm.train(samples, cv.ROW_SAMPLE, labels);
+check(svm.predict(cv.Mat([[1.5d, 1.5d]]))[1].at(0, 0) == 0 && svm.isTrained(), "SVM");
+var forest = cv.RTrees_create();
+forest.setMinSampleCount(1);
+forest.train(samples, cv.ROW_SAMPLE, labels);
+check(forest.predict(cv.Mat([[9, 9]]))[0] == 1, "RTrees");
+
+var wide = cv.resize(cv.cvtColor(texture, cv.COLOR_GRAY2BGR), [640, 240]);
+var stitched = cv.Stitcher_create(cv.Stitcher_SCANS).stitch([wide.roi([0, 0, 400, 240]).clone(), wide.roi([240, 0, 400, 240]).clone()]);
+check(stitched[0] == cv.Stitcher_OK && stitched[1].cols > 500, "Stitcher");
+print("analysis checks", count);

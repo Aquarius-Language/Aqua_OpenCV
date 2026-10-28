@@ -10,3 +10,5 @@ target_sources(aqua_opencv PRIVATE "${llvm}/libunwind/src/Unwind-wasm.c")
 target_include_directories(aqua_opencv PRIVATE "${llvm}/libcxxabi/include" "${llvm}/libcxx/src"
     "${llvm}/libunwind/include" "${llvm}/libunwind/src")
 target_compile_definitions(aqua_opencv PRIVATE _LIBCXXABI_BUILDING_LIBRARY _LIBCXXABI_HAS_NO_THREADS _LIBCPP_BUILDING_LIBRARY _LIBUNWIND_HIDE_SYMBOLS _LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS)
+# The setjmp/longjmp runtime (__wasm_setjmp, __wasm_longjmp) of the pinned WASI sysroot, private to this module.
+target_link_libraries(aqua_opencv PRIVATE "${AQUA_WASI_SYSROOT}/lib/wasm32-wasip1/libsetjmp.a")

@@ -1,0 +1,104 @@
+# imgproc and photo: color, geometry, filters, thresholds, morphology, histograms, contours, Hough, drawing.
+var cv = import("cv");
+var count = 0;
+var check = function(ok, name) { count += 1; if (!ok) { print("OPENCV CHECK FAILED", name); OpenCVCheckFailed(); } };
+
+# A synthetic scene: a filled square, a filled circle and a line on black.
+var scene = cv.Mat(240, 320, cv.CV_8UC3, 0);
+cv.rectangle(scene, [30, 30], [110, 110], [255, 255, 255], cv.FILLED);
+cv.circle(scene, [220, 120], 50, [0, 0, 255], -1, cv.LINE_AA);
+cv.line(scene, [20, 200], [300, 200], [0, 255, 0], 3);
+cv.putText(scene, "Aqua", [140, 230], cv.FONT_HERSHEY_SIMPLEX, 0.8d, [255, 200, 0], 2);
+check(scene.at(70, 70)[0] == 255 && scene.at(120, 220)[2] == 255, "drawing");
+
+var gray = cv.cvtColor(scene, cv.COLOR_BGR2GRAY);
+check(gray.channels() == 1 && gray.at(70, 70) == 255, "cvtColor");
+var hsv = cv.cvtColor(scene, cv.COLOR_BGR2HSV);
+check(hsv.at(120, 220)[1] == 255, "cvtColor HSV");
+check(cv.resize(scene, [160, 120]).cols == 160 && cv.resize(scene, cv.None, 0.5d, 0.25d).rows == 60, "resize");
+var rotation = cv.getRotationMatrix2D([160, 120], 90, 1);
+check(rotation.rows == 2 && rotation.cols == 3 && cv.warpAffine(scene, rotation, [320, 240]).cols == 320, "warpAffine");
+var homography = cv.getPerspectiveTransform([[0, 0], [319, 0], [319, 239], [0, 239]], [[10, 5], [300, 0], [319, 239], [0, 230]]);
+check(cv.warpPerspective(scene, homography, [320, 240]).rows == 240, "warpPerspective");
+check(cv.pyrDown(scene).cols == 160 && cv.pyrUp(scene).cols == 640, "pyramids");
+
+check(cv.GaussianBlur(gray, [5, 5], 0).at(70, 30) < 255, "GaussianBlur");
+check(cv.medianBlur(gray, 5).at(70, 70) == 255 && cv.blur(gray, [3, 3]).rows == 240, "medianBlur, blur");
+check(cv.bilateralFilter(scene, 9, 75, 75).channels() == 3, "bilateralFilter");
+var edges = cv.Canny(gray, 50, 150);
+check(cv.countNonZero(edges) > 300, "Canny");
+var sobel = cv.convertScaleAbs(cv.Sobel(gray, cv.CV_16S, 1, 0));
+check(sobel.at(70, 30) > 0 && cv.Laplacian(gray, cv.CV_16S).depth() == cv.CV_16S, "Sobel, Laplacian");
+var sharpen = cv.filter2D(gray, -1, cv.Mat([[0, -1, 0], [-1, 5, -1], [0, -1, 0]]));
+check(sharpen.at(70, 70) == 255, "filter2D");
+var otsu = cv.threshold(gray, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+check(otsu[0] > 0 && otsu[1].at(70, 70) == 255, "threshold Otsu");
+check(cv.adaptiveThreshold(gray, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2).rows == 240, "adaptiveThreshold");
+var kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, [5, 5]);
+check(cv.erode(gray, kernel).at(31, 31) == 0 && cv.dilate(gray, kernel).at(70, 28) == 255, "erode, dilate");
+check(cv.morphologyEx(gray, cv.MORPH_GRADIENT, kernel).at(70, 70) == 0, "morphologyEx");
+check(cv.equalizeHist(gray).rows == 240 && cv.createCLAHE(2.0d, [8, 8]).apply(gray).rows == 240, "equalizeHist, CLAHE");
+var hist = cv.calcHist([gray], [0], cv.None, [256], [0, 256]);
+check(hist.rows == 256 && hist.at(255, 0) >= 6400, "calcHist");
+check(cv.compareHist(hist, hist, cv.HISTCMP_CORREL) > 0.999d, "compareHist");
+check(cv.applyColorMap(gray, cv.COLORMAP_TURBO).channels() == 3, "applyColorMap");
+check(cv.distanceTransform(otsu[1], cv.DIST_L2, 3).depth() == cv.CV_32F, "distanceTransform");
+
+var found = cv.findContours(otsu[1], cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+var contours = found[0];
+check(len(contours) >= 3, "findContours");
+var square = contours[0];
+for (var i = 0; i < len(contours); i++) { if (cv.contourArea(contours[i]) > cv.contourArea(square)) { square = contours[i]; } }
+check(cv.contourArea(square) > 6000 && len(cv.approxPolyDP(square, 0.02d * cv.arcLength(square, true), true)) >= 4, "contourArea, approxPolyDP");
+var box = cv.boundingRect(square);
+check(box[2] > 70 && box[3] > 70, "boundingRect");
+var circle = cv.minEnclosingCircle(contours[0]);
+check(circle[1] > 0 && len(cv.minAreaRect(square)) == 3 && len(cv.boxPoints(cv.minAreaRect(square))) == 4, "enclosing shapes");
+check(len(cv.convexHull(square)) >= 4 && cv.moments(square)["m00"] > 6000, "convexHull, moments");
+check(len(cv.HuMoments(cv.moments(square))) == 7 && cv.matchShapes(square, square, cv.CONTOURS_MATCH_I1, 0) == 0, "HuMoments, matchShapes");
+check(cv.pointPolygonTest(square, [70, 70], false) > 0, "pointPolygonTest");
+var drawn = cv.drawContours(cv.Mat(240, 320, cv.CV_8UC3, 0), contours, -1, [0, 255, 0], 2);
+check(cv.countNonZero(cv.cvtColor(drawn, cv.COLOR_BGR2GRAY)) > 300, "drawContours");
+var labeled = cv.connectedComponentsWithStats(otsu[1]);
+check(labeled[0] >= 4 && labeled[2].rows == labeled[0], "connectedComponentsWithStats");
+
+var lines = cv.HoughLinesP(edges, 1, cv.CV_PI / 180, 50, 80, 10);
+check(len(lines) >= 1 && len(lines[0]) == 4, "HoughLinesP");
+check(len(cv.HoughLines(edges, 1, cv.CV_PI / 180, 120)) >= 1, "HoughLines");
+var circles = cv.HoughCircles(cv.medianBlur(gray, 5), cv.HOUGH_GRADIENT, 1, 50, 100, 20, 30, 70);
+check(len(circles) >= 1 && circles[0][2] > 35, "HoughCircles");
+var corners = cv.goodFeaturesToTrack(gray, 20, 0.01d, 10);
+check(len(corners) >= 4, "goodFeaturesToTrack");
+check(cv.cornerHarris(cv.Mat(gray).convertTo(cv.CV_32F), 2, 3, 0.04d).depth() == cv.CV_32F, "cornerHarris");
+var tmpl = gray.roi([20, 20, 100, 100]).clone();
+var scores = cv.matchTemplate(gray, tmpl, cv.TM_CCOEFF_NORMED);
+var best = cv.minMaxLoc(scores);
+check(best[3][0] == 20 && best[3][1] == 20 && best[1] > 0.99d, "matchTemplate");
+
+var markers = cv.Mat(240, 320, cv.CV_32SC1, 0);
+cv.circle(markers, [70, 70], 5, 1, -1);
+cv.circle(markers, [5, 5], 3, 2, -1);
+cv.watershed(scene, markers);
+check(markers.at(70, 70) == 1, "watershed");
+var mask = cv.Mat(240, 320, cv.CV_8UC1, 0);
+var bg = cv.zeros(1, 65, cv.CV_64F);
+var fg = cv.zeros(1, 65, cv.CV_64F);
+cv.grabCut(scene, mask, [160, 60, 120, 120], bg, fg, 2, cv.GC_INIT_WITH_RECT);
+check(mask.at(120, 220) == cv.GC_FGD || mask.at(120, 220) == cv.GC_PR_FGD, "grabCut");
+var fill = cv.floodFill(scene.clone(), cv.None, [5, 5], [255, 0, 255]);
+check(fill[0] > 40000, "floodFill");
+
+var damaged = scene.clone();
+var holes = cv.Mat(240, 320, cv.CV_8UC1, 0);
+cv.line(holes, [0, 70], [320, 70], 255, 3);
+cv.line(damaged, [0, 70], [320, 70], [0, 255, 255], 3);
+check(cv.inpaint(damaged, holes, 3, cv.INPAINT_TELEA).at(70, 70)[2] > 200, "inpaint");
+check(cv.fastNlMeansDenoisingColored(scene, 5, 5, 7, 21).rows == 240, "fastNlMeansDenoisingColored");
+check(len(cv.pencilSketch(scene)) == 2 && cv.stylization(scene).channels() == 3, "pencilSketch, stylization");
+check(cv.detailEnhance(scene).channels() == 3 && cv.edgePreservingFilter(scene).channels() == 3, "detailEnhance, edgePreservingFilter");
+var clone = cv.seamlessClone(scene.roi([20, 20, 100, 100]).clone(), cv.Mat(240, 320, cv.CV_8UC3, [80, 80, 80]), cv.Mat(100, 100, cv.CV_8UC1, 255), [160, 120], cv.NORMAL_CLONE);
+check(clone.rows == 240, "seamlessClone");
+check(len(cv.decolor(scene)) == 2, "decolor");
+var fused = cv.createMergeMertens().process([scene, cv.convertScaleAbs(scene, 0.5d)]);
+check(fused.depth() == cv.CV_32F, "MergeMertens");
+print("imgproc checks", count);

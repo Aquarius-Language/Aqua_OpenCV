@@ -10,7 +10,7 @@ set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 set(CMAKE_DISABLE_FIND_PACKAGE_Python3 TRUE)
 set(CMAKE_DISABLE_FIND_PACKAGE_PythonInterp TRUE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(BUILD_LIST core,imgproc,features2d,calib3d,video,objdetect,photo,stitching,dnn CACHE STRING "" FORCE)
+set(BUILD_LIST core,imgproc,imgcodecs,features2d,calib3d,video,objdetect,photo,stitching,dnn,ml CACHE STRING "" FORCE)
 foreach(option BUILD_TESTS BUILD_PERF_TESTS BUILD_EXAMPLES BUILD_DOCS BUILD_opencv_apps BUILD_opencv_python2
     BUILD_opencv_python3 BUILD_opencv_python_bindings_generator BUILD_opencv_python_tests BUILD_opencv_gapi
     BUILD_JAVA BUILD_opencv_js BUILD_ANDROID_PROJECTS BUILD_ANDROID_EXAMPLES BUILD_ANDROID_SERVICE
@@ -32,8 +32,9 @@ set(CPU_DISPATCH "" CACHE STRING "" FORCE)
 if(AQUA_TARGET STREQUAL "web")
     set(OPENCV_DISABLE_THREAD_SUPPORT ON CACHE BOOL "" FORCE)
     set(WITH_PTHREADS_PF OFF CACHE BOOL "" FORCE)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fexceptions -fwasm-exceptions")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fwasm-exceptions")
+    # libjpeg and libpng report errors with setjmp/longjmp, which WebAssembly runs on its exception handling.
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fexceptions -fwasm-exceptions -mllvm -wasm-enable-sjlj")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fwasm-exceptions -mllvm -wasm-enable-sjlj")
 endif()
 add_subdirectory(vendor/opencv-4.12.0 opencv EXCLUDE_FROM_ALL)
 if(AQUA_TARGET STREQUAL "web")
@@ -46,12 +47,14 @@ if(AQUA_TARGET STREQUAL "web")
     endif()
 endif()
 set(opencv_includes vendor/opencv-4.12.0/include)
-foreach(module core imgproc imgcodecs features2d calib3d video objdetect photo stitching dnn flann)
+foreach(module core imgproc imgcodecs features2d calib3d video objdetect photo stitching dnn flann ml)
     list(APPEND opencv_includes "vendor/opencv-4.12.0/modules/${module}/include")
 endforeach()
-aqua_add_library(opencv SOURCES src/opencv.cpp INCLUDE_DIRECTORIES vendor ${opencv_includes}
+aqua_add_library(opencv SOURCES src/binding.cpp src/core.cpp src/imgproc.cpp src/features.cpp src/calib3d.cpp src/video.cpp
+    src/objdetect.cpp src/photo.cpp src/dnn.cpp src/ml.cpp INCLUDE_DIRECTORIES ${opencv_includes}
     "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/opencv" LINK_LIBRARIES opencv_core opencv_imgproc
-    opencv_features2d opencv_calib3d opencv_video opencv_objdetect opencv_photo opencv_stitching opencv_dnn)
+    opencv_imgcodecs opencv_features2d opencv_calib3d opencv_video opencv_objdetect opencv_photo opencv_stitching opencv_dnn
+    opencv_ml)
 if(AQUA_TARGET STREQUAL "web")
     include(wasm-exceptions.cmake)
 endif()

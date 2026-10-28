@@ -1,0 +1,878 @@
+# The labs: one per OpenCV feature area. Each lab takes the frame context and returns the picture to show and a few
+# lines of live numbers. Every Mat made for one frame goes through T(), and the app deletes them after drawing,
+# as OpenCV.js does, so pixels never wait for the collector.
+# 各實驗室對應一個 OpenCV 功能領域：接收影格情境，回傳要顯示的影像與即時數據。
+var cv = import("cv");
+var P = import("Processing");
+var S = import("String");
+var Arrays = import("Array");
+var scene = import("scene.aqua");
+
+# The frame context the app fills in before each run.
+struct Ctx { frame, t, knob, knobSet, mx, my, down, clicked, released, right, zh, store, first, source }
+struct Lab { key, en, zh, module, knobEn, knobZh, codeEn, codeZh, run }
+struct Out { image, notes }
+
+var arena = [];
+var T = function(m) { Arrays.Append(arena, m); return m; };
+var flush = function() {
+    for (var i = 0; i < len(arena); i++) { arena[i].delete(); }
+    arena = [];
+};
+
+var tr = function(c, en, zh) { if (c.zh) { return zh; } return en; };
+var fixed = function(n, digits) {
+    var scale = 1;
+    for (var i = 0; i < digits; i++) { scale = scale * 10; }
+    return S.From(P.round(n * scale) / (scale * 1.0d));
+};
+var odd = function(n) { var k = int(n); if (k % 2 == 0) { k = k + 1; } return k; };
+var gray = function(c) { return T(cv.cvtColor(c.frame, cv.COLOR_BGR2GRAY)); };
+var dim = function(m, amount) { return T(m.convertTo(cv.CV_8UC3, amount)); };
+var label = function(img, text, x, y) {
+    cv.putText(img, text, [x + 1, y + 1], cv.FONT_HERSHEY_SIMPLEX, 0.5d, [0, 0, 0], 3, cv.LINE_AA);
+    cv.putText(img, text, [x, y], cv.FONT_HERSHEY_SIMPLEX, 0.5d, [255, 255, 255], 1, cv.LINE_AA);
+};
+var bgr = function(m) {
+    if (m.channels() == 1) { return T(cv.cvtColor(m, cv.COLOR_GRAY2BGR)); }
+    return m;
+};
+var fit = function(m, w, h) { return T(cv.resize(bgr(m), [w, h], 0, 0, cv.INTER_AREA)); };
+# Two pictures side by side at 640 x 360 with captions.
+var pair = function(a, b, captionA, captionB) {
+    var out = T(cv.hconcat([fit(a, 320, 360), fit(b, 320, 360)]));
+    cv.line(out, [320, 0], [320, 360], [255, 255, 255], 2);
+    label(out, captionA, 12, 24);
+    label(out, captionB, 332, 24);
+    return out;
+};
+var asset = function(c, key, path, width, height) {
+    var st = c.store;
+    if (st[key] == cv.None) {
+        var loaded = cv.imread(path);
+        st[key] = cv.resize(loaded, [width, height], 0, 0, cv.INTER_AREA);
+        loaded.delete();
+    }
+    return st[key];
+};
+var at = function(c) { return c.mx >= 0 && c.my >= 0 && c.mx < c.frame.cols && c.my < c.frame.rows; };
+
+var COLORMAPS = ["AUTUMN", "BONE", "JET", "WINTER", "RAINBOW", "OCEAN", "SUMMER", "SPRING", "COOL", "HSV", "PINK", "HOT",
+    "PARULA", "MAGMA", "INFERNO", "PLASMA", "VIRIDIS", "CIVIDIS", "TWILIGHT", "TWILIGHT_SHIFTED", "TURBO", "DEEPGREEN"];
+var MORPH = [["MORPH_ERODE", "侵蝕"], ["MORPH_DILATE", "膨脹"], ["MORPH_OPEN", "開運算"], ["MORPH_CLOSE", "閉運算"],
+    ["MORPH_GRADIENT", "形態學梯度"], ["MORPH_TOPHAT", "頂帽"], ["MORPH_BLACKHAT", "黑帽"]];
+
+# ---- Color --------------------------------------------------------------------------------------------------------
+var colorLab = function(c) {
+    var hsv = T(cv.cvtColor(c.frame, cv.COLOR_BGR2HSV));
+    if (c.clicked && at(c)) { c.knobSet = hsv.at(int(c.my), int(c.mx))[0] / 179.0d; }
+    var hue = P.round(c.knob * 179);
+    var mask = T(cv.inRange(hsv, [P.max(hue - 12, 0), 150, 80], [P.min(hue + 12, 179), 255, 255]));
+    mask = T(cv.morphologyEx(mask, cv.MORPH_OPEN, T(cv.getStructuringElement(cv.MORPH_ELLIPSE, [5, 5]))));
+    var out = bgr(T(cv.cvtColor(c.frame, cv.COLOR_BGR2GRAY)));
+    out = dim(out, 0.55d);
+    c.frame.copyTo(out, mask);
+    var found = cv.findContours(mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    cv.drawContours(out, found[0], -1, [255, 255, 255], 2, cv.LINE_AA);
+    T(found[1]);
+    var swatch = T(cv.cvtColor(cv.Mat(1, 1, cv.CV_8UC3, [hue, 255, 255]), cv.COLOR_HSV2BGR)).at(0, 0);
+    cv.rectangle(out, [12, 12], [52, 52], swatch, -1);
+    cv.rectangle(out, [12, 12], [52, 52], [255, 255, 255], 2);
+    return Out(out, [tr(c, "hue ", "色相 ") + S.From(hue), tr(c, "matching pixels ", "相符像素 ") + S.From(cv.countNonZero(mask)),
+        tr(c, "click a color to pick it", "點選畫面即可取色")]);
+};
+
+var colormapLab = function(c) {
+    var index = int(P.min(21, c.knob * 22));
+    var out = T(cv.applyColorMap(gray(c), index));
+    label(out, "COLORMAP_" + COLORMAPS[index], 12, 24);
+    return Out(out, ["cv.COLORMAP_" + COLORMAPS[index], tr(c, "22 built-in palettes", "22 種內建色盤")]);
+};
+
+# ---- Filters ------------------------------------------------------------------------------------------------------
+var smoothLab = function(c) {
+    var k = odd(1 + c.knob * 24);
+    var out = c.frame.clone();
+    T(out);
+    var w = 213;
+    var start = cv.getTickCount();
+    T(cv.GaussianBlur(T(c.frame.roi([0, 0, w, 360])), [k, k], 0)).copyTo(out.roi([0, 0, w, 360]));
+    T(cv.medianBlur(T(c.frame.roi([w, 0, w, 360])), k)).copyTo(out.roi([w, 0, w, 360]));
+    T(cv.bilateralFilter(T(c.frame.roi([w * 2, 0, 640 - w * 2, 360])), P.min(k, 15), 80, 80)).copyTo(out.roi([w * 2, 0, 640 - w * 2, 360]));
+    var ms = (cv.getTickCount() - start) * 1000.0d / cv.getTickFrequency();
+    cv.line(out, [w, 0], [w, 360], [255, 255, 255], 1);
+    cv.line(out, [w * 2, 0], [w * 2, 360], [255, 255, 255], 1);
+    label(out, "GaussianBlur", 10, 24);
+    label(out, "medianBlur", w + 10, 24);
+    label(out, "bilateralFilter", w * 2 + 10, 24);
+    return Out(out, [tr(c, "kernel ", "核心 ") + S.From(k) + " x " + S.From(k), fixed(ms, 1) + " ms"]);
+};
+
+var edgeLab = function(c) {
+    var low = 20 + c.knob * 160;
+    var g = T(cv.GaussianBlur(gray(c), [5, 5], 0));
+    var edges = T(cv.Canny(g, low, low * 2.5d));
+    var glow = T(cv.GaussianBlur(T(cv.dilate(edges, T(cv.getStructuringElement(cv.MORPH_ELLIPSE, [5, 5])))), [0, 0], 4));
+    var neon = T(cv.merge([T(cv.add(edges, glow)), T(glow.convertTo(cv.CV_8U, 0.6d)), T(cv.add(edges, T(glow.convertTo(cv.CV_8U, 0.9d))))]));
+    var out = T(cv.add(dim(c.frame, 0.25d), neon));
+    return Out(out, ["Canny " + S.From(int(low)) + " / " + S.From(int(low * 2.5d)), tr(c, "edge pixels ", "邊緣像素 ") + S.From(cv.countNonZero(edges))]);
+};
+
+var gradientLab = function(c) {
+    var g = gray(c);
+    var gx = T(cv.Sobel(g, cv.CV_32F, 1, 0, 3));
+    var gy = T(cv.Sobel(g, cv.CV_32F, 0, 1, 3));
+    var polar = cv.cartToPolar(gx, gy, true);
+    T(polar[0]); T(polar[1]);
+    var hue = T(polar[1].convertTo(cv.CV_8U, 0.5d));
+    var value = T(polar[0].convertTo(cv.CV_8U, 0.6d + c.knob * 3));
+    var full = T(cv.Mat(360, 640, cv.CV_8UC1, 255));
+    var out = T(cv.cvtColor(T(cv.merge([hue, full, value])), cv.COLOR_HSV2BGR));
+    return Out(out, ["Sobel + cartToPolar", tr(c, "color = gradient direction", "顏色 = 梯度方向"), tr(c, "brightness = magnitude", "亮度 = 梯度強度")]);
+};
+
+var thresholdLab = function(c) {
+    var g = gray(c);
+    var level = c.knob * 255;
+    var fixedThreshold = cv.threshold(g, level, 255, cv.THRESH_BINARY);
+    var otsu = cv.threshold(g, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    T(fixedThreshold[1]); T(otsu[1]);
+    var adaptive = T(cv.adaptiveThreshold(g, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 21, 4));
+    var top = T(cv.hconcat([fit(g, 320, 180), fit(fixedThreshold[1], 320, 180)]));
+    var bottom = T(cv.hconcat([fit(otsu[1], 320, 180), fit(adaptive, 320, 180)]));
+    var out = T(cv.vconcat([top, bottom]));
+    label(out, "gray", 10, 22);
+    label(out, "THRESH_BINARY " + S.From(int(level)), 330, 22);
+    label(out, "THRESH_OTSU " + S.From(int(otsu[0])), 10, 202);
+    label(out, "adaptiveThreshold", 330, 202);
+    return Out(out, [tr(c, "Otsu picked ", "Otsu 自動門檻 ") + S.From(int(otsu[0]))]);
+};
+
+var morphLab = function(c) {
+    var index = int(P.min(6, c.knob * 7));
+    var binary = cv.threshold(gray(c), 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)[1];
+    T(binary);
+    var kernel = T(cv.getStructuringElement(cv.MORPH_ELLIPSE, [9, 9]));
+    var result = T(cv.morphologyEx(binary, index, kernel, cv.None, 2));
+    var out = pair(binary, T(cv.applyColorMap(result, cv.COLORMAP_VIRIDIS)), "THRESH_OTSU", "cv." + MORPH[index][0]);
+    return Out(out, [MORPH[index][0] + " / " + MORPH[index][1], tr(c, "9 x 9 ellipse, 2 iterations", "9 x 9 橢圓核心，2 次")]);
+};
+
+# ---- Shapes -------------------------------------------------------------------------------------------------------
+var shapeLab = function(c) {
+    var hsv = T(cv.cvtColor(c.frame, cv.COLOR_BGR2HSV));
+    var mask = T(cv.inRange(hsv, [0, 150, 90], [179, 255, 255]));
+    mask = T(cv.morphologyEx(mask, cv.MORPH_CLOSE, T(cv.getStructuringElement(cv.MORPH_ELLIPSE, [7, 7]))));
+    var found = cv.findContours(mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    T(found[1]);
+    var out = dim(c.frame, 0.6d);
+    var counted = 0;
+    for (var i = 0; i < len(found[0]); i++) {
+        var contour = found[0][i];
+        var area = cv.contourArea(contour);
+        if (area >= 400) {
+            counted++;
+            var approx = cv.approxPolyDP(contour, (0.01d + c.knob * 0.06d) * cv.arcLength(contour, true), true);
+            var corners = len(approx);
+            # Drawn with putText, whose Hershey fonts are ASCII only.
+            var name = "circle";
+            if (corners == 3) { name = "triangle"; }
+            else if (corners == 4) { name = "square"; }
+            else if (corners == 5) { name = "pentagon"; }
+            else if (corners == 6) { name = "hexagon"; }
+            cv.polylines(out, [cv.boxPoints(cv.minAreaRect(contour))], true, [255, 200, 0], 1, cv.LINE_AA);
+            var circle = cv.minEnclosingCircle(contour);
+            cv.circle(out, circle[0], int(circle[1]), [255, 255, 255], 1, cv.LINE_AA);
+            cv.polylines(out, [approx], true, [0, 255, 180], 2, cv.LINE_AA);
+            var m = cv.moments(contour);
+            var cx = m["m10"] / m["m00"];
+            var cy = m["m01"] / m["m00"];
+            cv.drawMarker(out, [cx, cy], [0, 255, 255], cv.MARKER_CROSS, 12, 2);
+            label(out, name + " " + S.From(corners), int(cx) - 30, int(cy) - int(circle[1]) - 8);
+        }
+    }
+    return Out(out, [tr(c, "shapes ", "形狀 ") + S.From(counted), "approxPolyDP · minAreaRect · moments"]);
+};
+
+var houghLab = function(c) {
+    var g = gray(c);
+    var edges = T(cv.Canny(g, 60, 160));
+    var out = dim(c.frame, 0.7d);
+    var lines = cv.HoughLinesP(edges, 1, cv.CV_PI / 180, 60, 30 + c.knob * 120, 8);
+    for (var i = 0; i < len(lines); i++) {
+        var l = lines[i];
+        cv.line(out, [l[0], l[1]], [l[2], l[3]], [60, 60, 255], 2, cv.LINE_AA);
+    }
+    var circles = cv.HoughCircles(T(cv.medianBlur(g, 5)), cv.HOUGH_GRADIENT, 1, 40, 120, 32, 12, 90);
+    for (var j = 0; j < len(circles); j++) {
+        var k = circles[j];
+        cv.circle(out, [k[0], k[1]], int(k[2]), [0, 255, 120], 3, cv.LINE_AA);
+        cv.circle(out, [k[0], k[1]], 3, [0, 255, 255], -1);
+    }
+    return Out(out, [tr(c, "lines ", "直線 ") + S.From(len(lines)), tr(c, "circles ", "圓形 ") + S.From(len(circles))]);
+};
+
+var cornerLab = function(c) {
+    var g = gray(c);
+    var harris = T(cv.cornerHarris(T(g.convertTo(cv.CV_32F)), 2, 3, 0.04d));
+    var heat = T(cv.applyColorMap(T(cv.normalize(harris, 0, 255, cv.NORM_MINMAX, cv.CV_8U)), cv.COLORMAP_INFERNO));
+    var out = T(cv.addWeighted(dim(c.frame, 0.8d), 1, heat, 0.8d, 0));
+    var count = 20 + int(c.knob * 280);
+    var corners = cv.goodFeaturesToTrack(g, count, 0.01d, 8);
+    for (var i = 0; i < len(corners); i++) {
+        cv.circle(out, corners[i], 4, [80, 255, 120], 1, cv.LINE_AA);
+    }
+    return Out(out, ["goodFeaturesToTrack " + S.From(len(corners)), "cornerHarris"]);
+};
+
+# ---- Features -----------------------------------------------------------------------------------------------------
+var featureLab = function(c) {
+    var st = c.store;
+    var reference = asset(c, "box", "assets/box.png", 230, 196);
+    var refGray = st["boxGray"];
+    if (refGray == cv.None) { refGray = cv.cvtColor(reference, cv.COLOR_BGR2GRAY); st["boxGray"] = refGray; }
+    var count = 300 + int(c.knob * 1200);
+    if (st["orbCount"] != count) {
+        st["orb"] = cv.ORB_create(count);
+        st["orbCount"] = count;
+        st["ref"] = st["orb"].detectAndCompute(refGray);
+    }
+    var ref = st["ref"];
+    # Put the reference on a tilting plane inside the live frame.
+    var t = c.t;
+    var cx = 330 + 120 * P.sin(t * 0.7d);
+    var cy = 180 + 30 * P.sin(t * 1.3d);
+    var spread = 95 + 20 * P.sin(t * 0.9d);
+    var tilt = 35 * P.sin(t * 1.1d);
+    var quad = [[cx - spread + tilt, cy - 85], [cx + spread + tilt, cy - 75 + tilt * 0.3d], [cx + spread - tilt, cy + 85], [cx - spread - tilt, cy + 80 - tilt * 0.3d]];
+    var h = T(cv.getPerspectiveTransform([[0, 0], [229, 0], [229, 195], [0, 195]], quad));
+    var warped = T(cv.warpPerspective(reference, h, [640, 360]));
+    var region = T(cv.warpPerspective(T(cv.Mat(196, 230, cv.CV_8UC1, 255)), h, [640, 360]));
+    var composite = c.frame.clone();
+    T(composite);
+    warped.copyTo(composite, region);
+    var sceneFeatures = st["orb"].detectAndCompute(T(cv.cvtColor(composite, cv.COLOR_BGR2GRAY)));
+    T(sceneFeatures[1]);
+    var good = [];
+    if (sceneFeatures[1].rows > 0 && ref[1].rows > 0) {
+        var knn = cv.BFMatcher(cv.NORM_HAMMING).knnMatch(ref[1], sceneFeatures[1], 2);
+        for (var i = 0; i < len(knn); i++) {
+            if (len(knn[i]) == 2 && knn[i][0]["distance"] < 0.75d * knn[i][1]["distance"]) { Arrays.Append(good, knn[i][0]); }
+        }
+    }
+    var out = T(cv.drawMatches(reference, ref[0], composite, sceneFeatures[0], good, cv.None, [0, 255, 160], [255, 120, 40], cv.None, cv.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS));
+    var inliers = 0;
+    if (len(good) >= 8) {
+        var from = [];
+        var to = [];
+        for (var j = 0; j < len(good); j++) {
+            Arrays.Append(from, ref[0][good[j]["queryIdx"]]["pt"]);
+            Arrays.Append(to, sceneFeatures[0][good[j]["trainIdx"]]["pt"]);
+        }
+        var found = cv.findHomography(from, to, cv.RANSAC, 4);
+        T(found[0]); T(found[1]);
+        inliers = cv.countNonZero(found[1]);
+        if (!found[0].empty()) {
+            var outline = cv.perspectiveTransform([[0, 0], [229, 0], [229, 195], [0, 195]], found[0]);
+            var shifted = [];
+            for (var k = 0; k < 4; k++) { Arrays.Append(shifted, [outline[k][0] + 230, outline[k][1]]); }
+            cv.polylines(out, [shifted], true, [0, 255, 255], 3, cv.LINE_AA);
+        }
+    }
+    return Out(out, ["ORB " + S.From(len(sceneFeatures[0])) + tr(c, " keypoints", " 個特徵點"), tr(c, "matches ", "匹配 ") + S.From(len(good)),
+        "findHomography " + tr(c, "inliers ", "內點 ") + S.From(inliers)]);
+};
+
+# ---- Motion -------------------------------------------------------------------------------------------------------
+var flowLab = function(c) {
+    var st = c.store;
+    var small = T(cv.resize(gray(c), [320, 180], 0, 0, cv.INTER_AREA));
+    var previous = st["previous"];
+    st["previous"] = small.clone();
+    if (previous == cv.None) { return Out(c.frame, [tr(c, "warming up", "準備中")]); }
+    var flow = T(cv.calcOpticalFlowFarneback(previous, small, cv.None, 0.5d, 3, 15, 3, 5, 1.2d, 0));
+    previous.delete();
+    var planes = cv.split(flow);
+    T(planes[0]); T(planes[1]);
+    var polar = cv.cartToPolar(planes[0], planes[1], true);
+    T(polar[0]); T(polar[1]);
+    var full = T(cv.Mat(180, 320, cv.CV_8UC1, 255));
+    var value = T(polar[0].convertTo(cv.CV_8U, 40 + c.knob * 120));
+    var color = T(cv.cvtColor(T(cv.merge([T(polar[1].convertTo(cv.CV_8U, 0.5d)), full, value])), cv.COLOR_HSV2BGR));
+    var out = T(cv.addWeighted(dim(c.frame, 1), 0.45d, T(cv.resize(color, [640, 360])), 1, 0));
+    var moving = 0;
+    for (var y = 10; y < 180; y += 15) {
+        for (var x = 10; x < 320; x += 15) {
+            var v = flow.at(y, x);
+            if (v[0] * v[0] + v[1] * v[1] > 0.5d) {
+                moving++;
+                cv.arrowedLine(out, [x * 2, y * 2], [x * 2 + v[0] * 6, y * 2 + v[1] * 6], [255, 255, 255], 1, cv.LINE_AA, 0, 0.4d);
+            }
+        }
+    }
+    return Out(out, ["calcOpticalFlowFarneback", tr(c, "moving cells ", "移動區塊 ") + S.From(moving)]);
+};
+
+var backgroundLab = function(c) {
+    var st = c.store;
+    if (st["mog"] == cv.None) { st["mog"] = cv.createBackgroundSubtractorMOG2(300, 24, true); }
+    var mask = T(st["mog"].apply(c.frame, 0.002d + c.knob * 0.05d));
+    var clean = T(cv.threshold(mask, 200, 255, cv.THRESH_BINARY)[1]);
+    clean = T(cv.morphologyEx(clean, cv.MORPH_OPEN, T(cv.getStructuringElement(cv.MORPH_ELLIPSE, [5, 5]))));
+    var tint = T(cv.Mat(360, 640, cv.CV_8UC3, [60, 60, 255]));
+    var out = dim(c.frame, 0.5d);
+    var hot = T(cv.addWeighted(c.frame, 0.4d, tint, 0.6d, 0));
+    hot.copyTo(out, clean);
+    var background = T(st["mog"].getBackgroundImage());
+    if (!background.empty()) {
+        T(cv.resize(background, [160, 90])).copyTo(out.roi([470, 260, 160, 90]));
+        cv.rectangle(out, [470, 260], [630, 350], [255, 255, 255], 1);
+        label(out, "getBackgroundImage", 470, 254);
+    }
+    return Out(out, ["BackgroundSubtractorMOG2", tr(c, "foreground ", "前景 ") + fixed(cv.countNonZero(clean) * 100.0d / 230400, 1) + "%"]);
+};
+
+var kalmanLab = function(c) {
+    var st = c.store;
+    if (st["kalman"] == cv.None) {
+        var k = cv.KalmanFilter(4, 2);
+        cv.matFromArray(4, 4, cv.CV_32F, [1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1]).copyTo(k.transitionMatrix);
+        cv.eye(2, 4, cv.CV_32F).copyTo(k.measurementMatrix);
+        cv.eye(4, 4, cv.CV_32F).convertTo(cv.CV_32F, 0.03d).copyTo(k.processNoiseCov);
+        cv.eye(4, 4, cv.CV_32F).copyTo(k.errorCovPost);
+        st["kalman"] = k;
+        st["noisy"] = [];
+        st["smooth"] = [];
+    }
+    var kalman = st["kalman"];
+    cv.eye(2, 2, cv.CV_32F).convertTo(cv.CV_32F, 1 + c.knob * 400).copyTo(kalman.measurementNoiseCov);
+    # The measurement: the red ball's centroid in the scene, the mouse otherwise; then made noisy on purpose.
+    var target = [c.mx, c.my];
+    if (c.source == "scene" || !at(c)) { target = scene.ball(c.t); }
+    var spread = c.knob * 45;
+    var measured = [target[0] + P.randomGaussian() * spread, target[1] + P.randomGaussian() * spread];
+    var predicted = T(kalman.predict());
+    var corrected = T(kalman.correct(measured));
+    var estimate = [corrected.at(0, 0), corrected.at(1, 0)];
+    Arrays.Append(st["noisy"], measured);
+    Arrays.Append(st["smooth"], estimate);
+    if (len(st["noisy"]) > 60) { st["noisy"] = rest(st["noisy"]); st["smooth"] = rest(st["smooth"]); }
+    var out = dim(c.frame, 0.6d);
+    for (var i = 0; i < len(st["noisy"]); i++) { cv.circle(out, st["noisy"][i], 3, [80, 80, 255], -1, cv.LINE_AA); }
+    cv.polylines(out, [st["smooth"]], false, [80, 255, 120], 3, cv.LINE_AA);
+    cv.circle(out, estimate, 12, [80, 255, 120], 2, cv.LINE_AA);
+    var ahead = [estimate[0] + corrected.at(2, 0) * 8, estimate[1] + corrected.at(3, 0) * 8];
+    cv.arrowedLine(out, estimate, ahead, [255, 255, 0], 2, cv.LINE_AA, 0, 0.3d);
+    return Out(out, ["KalmanFilter(4, 2)", tr(c, "noise ±", "雜訊 ±") + S.From(int(spread)) + " px", tr(c, "velocity ", "速度 ") +
+        fixed(corrected.at(2, 0), 1) + ", " + fixed(corrected.at(3, 0), 1)]);
+};
+
+var trackLab = function(c) {
+    var st = c.store;
+    var small = T(cv.resize(c.frame, [320, 180], 0, 0, cv.INTER_AREA));
+    if (c.clicked && at(c)) { st["dragFrom"] = [c.mx, c.my]; }
+    var dragging = c.down && st["dragFrom"] != cv.None;
+    if (c.released && st["dragFrom"] != cv.None) {
+        var a = st["dragFrom"];
+        var w = P.abs(c.mx - a[0]);
+        var h = P.abs(c.my - a[1]);
+        if (w > 12 && h > 12) { st["box"] = [P.min(a[0], c.mx) / 2, P.min(a[1], c.my) / 2, w / 2, h / 2]; st["tracker"] = cv.None; }
+        st["dragFrom"] = cv.None;
+    }
+    if (st["box"] == cv.None || (c.first && c.source == "scene")) {
+        var b = scene.ball(c.t);
+        st["box"] = [b[0] / 2 - 18, b[1] / 2 - 18, 36, 36];
+        st["tracker"] = cv.None;
+    }
+    var ok = true;
+    if (st["tracker"] == cv.None) {
+        st["tracker"] = cv.TrackerMIL_create();
+        st["tracker"].init(small, st["box"]);
+        st["trail"] = [];
+    } else {
+        var update = st["tracker"].update(small);
+        ok = update[0];
+        if (ok) { st["box"] = update[1]; }
+    }
+    var box = st["box"];
+    var center = [box[0] * 2 + box[2], box[1] * 2 + box[3]];
+    Arrays.Append(st["trail"], center);
+    if (len(st["trail"]) > 40) { st["trail"] = rest(st["trail"]); }
+    var out = dim(c.frame, 0.85d);
+    cv.polylines(out, [st["trail"]], false, [255, 200, 0], 2, cv.LINE_AA);
+    var color = [80, 255, 120];
+    if (!ok) { color = [60, 60, 255]; }
+    cv.rectangle(out, [box[0] * 2, box[1] * 2, box[2] * 2, box[3] * 2], color, 2, cv.LINE_AA);
+    if (dragging && at(c)) { cv.rectangle(out, st["dragFrom"], [c.mx, c.my], [255, 255, 255], 1); }
+    return Out(out, ["TrackerMIL", tr(c, "drag a box to track anything", "拖曳框選任何物體即可追蹤"), tr(c, "locked", "鎖定中") + ": " + S.From(ok)]);
+};
+
+# ---- Faces, codes and markers -------------------------------------------------------------------------------------
+var faceLab = function(c) {
+    var st = c.store;
+    var image = c.frame;
+    if (c.source == "scene") { image = st["portraitFrame"]; }
+    if (image == cv.None) { image = c.frame; }
+    if (st["yunet"] == cv.None) {
+        st["yunet"] = cv.FaceDetectorYN_create(cv.haarcascades + "face_detection_yunet_2023mar.onnx", "", [640, 360]);
+        st["eyes"] = cv.CascadeClassifier(cv.haarcascades + "haarcascade_eye.xml");
+    }
+    var detector = st["yunet"];
+    detector.setInputSize([image.cols, image.rows]);
+    detector.setScoreThreshold(0.5d + c.knob * 0.45d);
+    var start = cv.getTickCount();
+    var faces = T(detector.detect(image)[1]);
+    var ms = (cv.getTickCount() - start) * 1000.0d / cv.getTickFrequency();
+    var out = image.clone();
+    T(out);
+    var g = T(cv.cvtColor(image, cv.COLOR_BGR2GRAY));
+    for (var i = 0; i < faces.rows; i++) {
+        var x = faces.at(i, 0);
+        var y = faces.at(i, 1);
+        var w = faces.at(i, 2);
+        var h = faces.at(i, 3);
+        cv.rectangle(out, [x, y, w, h], [80, 255, 120], 2, cv.LINE_AA);
+        var colors = [[255, 80, 80], [80, 80, 255], [80, 255, 255], [255, 80, 255], [255, 255, 80]];
+        for (var p = 0; p < 5; p++) { cv.circle(out, [faces.at(i, 4 + p * 2), faces.at(i, 5 + p * 2)], 4, colors[p], -1, cv.LINE_AA); }
+        label(out, "YuNet " + fixed(faces.at(i, 14), 2), int(x), int(y) - 8);
+        var rx = P.max(0, int(x));
+        var ry = P.max(0, int(y));
+        var rw = P.min(int(w), image.cols - rx);
+        var rh = P.min(int(h * 0.6d), image.rows - ry);
+        if (rw > 20 && rh > 20) {
+            var eyes = st["eyes"].detectMultiScale(T(g.roi([rx, ry, rw, rh])), 1.1d, 6, 0, [12, 12]);
+            for (var e = 0; e < len(eyes); e++) {
+                var r = eyes[e];
+                cv.ellipse(out, [rx + r[0] + r[2] / 2, ry + r[1] + r[3] / 2], [r[2] / 2, r[3] / 3], 0, 0, 360, [255, 200, 0], 2, cv.LINE_AA);
+            }
+        }
+    }
+    return Out(out, [tr(c, "faces ", "人臉 ") + S.From(faces.rows), "dnn YuNet ONNX " + fixed(ms, 1) + " ms", "CascadeClassifier: haarcascade_eye"]);
+};
+
+var MESSAGES = ["https://opencv.org", "AquariusLang x OpenCV 4.12", "Hello from Aqua!", "cv.QRCodeDetector()"];
+var codeLab = function(c) {
+    var st = c.store;
+    var index = int(c.t / 3) % len(MESSAGES);
+    if (st["qrIndex"] != index) {
+        var code = cv.QRCodeEncoder_create().encode(MESSAGES[index]);
+        var bordered = cv.copyMakeBorder(code, 2, 2, 2, 2, cv.BORDER_CONSTANT, 255);
+        st["qr"] = cv.cvtColor(cv.resize(bordered, [180, 180], 0, 0, cv.INTER_NEAREST), cv.COLOR_GRAY2BGR);
+        st["qrIndex"] = index;
+        code.delete(); bordered.delete();
+    }
+    if (st["dictionary"] == cv.None) {
+        st["dictionary"] = cv.getPredefinedDictionary(cv.DICT_4X4_50);
+        st["aruco"] = cv.ArucoDetector(st["dictionary"]);
+        st["qrDetector"] = cv.QRCodeDetector();
+        var markers = [];
+        var ids = [7, 23, 42];
+        for (var m = 0; m < 3; m++) {
+            var marker = cv.generateImageMarker(st["dictionary"], ids[m], 80);
+            Arrays.Append(markers, cv.cvtColor(cv.copyMakeBorder(marker, 10, 10, 10, 10, cv.BORDER_CONSTANT, 255), cv.COLOR_GRAY2BGR));
+        }
+        st["markers"] = markers;
+    }
+    var out = dim(c.frame, 0.5d);
+    var tilt = 5 + c.knob * 25;
+    var t = c.t;
+    var place = function(img, cx, cy, size, angle, skew) {
+        var quad = [];
+        for (var q = 0; q < 4; q++) {
+            var a = angle + q * 1.5707963d + 0.785398d;
+            var stretch = 1 + skew * P.cos(a);
+            Arrays.Append(quad, [cx + size * stretch * P.cos(a), cy + size * P.sin(a)]);
+        }
+        var s = img.cols - 1;
+        var h = T(cv.getPerspectiveTransform([[s, s], [0, s], [0, 0], [s, 0]], quad));
+        var mask = T(cv.warpPerspective(T(cv.Mat(img.rows, img.cols, cv.CV_8UC1, 255)), h, [640, 360]));
+        T(cv.warpPerspective(img, h, [640, 360])).copyTo(out, mask);
+    };
+    place(st["qr"], 170, 180, 120, P.sin(t * 0.6d) * 0.5d, tilt / 100.0d);
+    for (var k = 0; k < 3; k++) {
+        place(st["markers"][k], 430 + 90 * P.cos(t * 0.8d + k * 2.1d), 180 + 100 * P.sin(t * 0.8d + k * 2.1d), 56, t * (0.5d + k * 0.3d), tilt / 140.0d);
+    }
+    var qr = st["qrDetector"].detectAndDecode(out);
+    T(qr[2]);
+    if (len(qr[1]) == 4) {
+        cv.polylines(out, [qr[1]], true, [0, 255, 255], 3, cv.LINE_AA);
+        label(out, qr[0], int(qr[1][0][0]), int(qr[1][0][1]) - 10);
+    }
+    var found = st["aruco"].detectMarkers(out);
+    cv.drawDetectedMarkers(out, found[0], found[1], [80, 255, 120]);
+    return Out(out, ["QR: " + qr[0], "ArUco DICT_4X4_50: " + S.Join(found[1], ", ")]);
+};
+
+var arLab = function(c) {
+    var st = c.store;
+    if (st["board"] == cv.None) {
+        var board = cv.Mat(280, 400, cv.CV_8UC3, [255, 255, 255]);
+        for (var row = 0; row < 7; row++) {
+            for (var col = 0; col < 10; col++) {
+                if ((row + col) % 2 == 0) { cv.rectangle(board, [col * 40, row * 40], [col * 40 + 39, row * 40 + 39], [0, 0, 0], -1); }
+            }
+        }
+        st["board"] = cv.copyMakeBorder(board, 20, 20, 20, 20, cv.BORDER_CONSTANT, [255, 255, 255]);
+        board.delete();
+        var objects = [];
+        for (var y = 1; y <= 6; y++) { for (var x = 1; x <= 9; x++) { Arrays.Append(objects, [x, y, 0]); } }
+        st["objects"] = objects;
+        st["camera"] = cv.Mat([[560, 0, 320], [0, 560, 180], [0, 0, 1]]);
+    }
+    var board = st["board"];
+    var camera = st["camera"];
+    var t = c.t;
+    var tiltAmount = 0.2d + c.knob * 0.6d;
+    var rvec = cv.Mat([0.35d + tiltAmount * P.sin(t * 0.9d), tiltAmount * P.sin(t * 0.6d), 0.25d * P.sin(t * 0.4d)]);
+    var tvec = cv.Mat([-5 + 1.5d * P.sin(t * 0.5d), -3.5d, 16 + 2 * P.sin(t * 0.7d)]);
+    T(rvec); T(tvec);
+    # The board's outer corners in square units (each square is 1; the border adds half a square).
+    var corners = cv.projectPoints([[-0.5d, -0.5d, 0], [10.5d, -0.5d, 0], [10.5d, 7.5d, 0], [-0.5d, 7.5d, 0]], rvec, tvec, camera, cv.None)[0];
+    var h = T(cv.getPerspectiveTransform([[0, 0], [439, 0], [439, 319], [0, 319]], corners));
+    var out = dim(c.frame, 0.7d);
+    var mask = T(cv.warpPerspective(T(cv.Mat(320, 440, cv.CV_8UC1, 255)), h, [640, 360]));
+    T(cv.warpPerspective(board, h, [640, 360])).copyTo(out, mask);
+    var start = cv.getTickCount();
+    var found = cv.findChessboardCorners(T(cv.cvtColor(out, cv.COLOR_BGR2GRAY)), [9, 6], cv.CALIB_CB_ADAPTIVE_THRESH + cv.CALIB_CB_FAST_CHECK);
+    var notes = [tr(c, "chessboard not found", "找不到棋盤")];
+    if (found[0]) {
+        var pose = cv.solvePnP(st["objects"], found[1], camera, cv.None);
+        T(pose[1]); T(pose[2]);
+        cv.drawChessboardCorners(out, [9, 6], found[1], true);
+        var cube = cv.projectPoints([[3, 2, 0], [6, 2, 0], [6, 5, 0], [3, 5, 0], [3, 2, -3], [6, 2, -3], [6, 5, -3], [3, 5, -3]], pose[1], pose[2], camera, cv.None)[0];
+        cv.fillConvexPoly(out, [cube[4], cube[5], cube[6], cube[7]], [255, 120, 40], cv.LINE_AA);
+        for (var e = 0; e < 4; e++) {
+            cv.line(out, cube[e], cube[e + 4], [0, 255, 255], 2, cv.LINE_AA);
+            cv.line(out, cube[e], cube[(e + 1) % 4], [0, 255, 255], 2, cv.LINE_AA);
+            cv.line(out, cube[e + 4], cube[(e + 1) % 4 + 4], [0, 255, 255], 2, cv.LINE_AA);
+        }
+        cv.drawFrameAxes(out, camera, cv.None, pose[1], pose[2], 2, 3);
+        var ms = (cv.getTickCount() - start) * 1000.0d / cv.getTickFrequency();
+        notes = ["findChessboardCorners + solvePnP", tr(c, "distance ", "距離 ") + fixed(pose[2].at(2, 0), 1) + tr(c, " squares", " 格"), fixed(ms, 1) + " ms"];
+    }
+    return Out(out, notes);
+};
+
+# ---- Segmentation and frequency -----------------------------------------------------------------------------------
+var kmeansLab = function(c) {
+    var k = 2 + int(c.knob * 10);
+    var small = T(cv.resize(c.frame, [160, 90], 0, 0, cv.INTER_AREA));
+    var samples = T(T(small.reshape(1, 14400)).convertTo(cv.CV_32F));
+    cv.setRNGSeed(1);
+    var result = cv.kmeans(samples, k, cv.None, [cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 8, 1], 1, cv.KMEANS_PP_CENTERS);
+    T(result[1]); T(result[2]);
+    var lut = T(cv.Mat(1, 256, cv.CV_8UC3, [0, 0, 0]));
+    for (var i = 0; i < k; i++) { lut.set(0, i, [result[2].at(i, 0), result[2].at(i, 1), result[2].at(i, 2)]); }
+    var labels = T(T(result[1].convertTo(cv.CV_8U)).reshape(1, 90));
+    var quantized = T(cv.LUT(T(cv.cvtColor(labels, cv.COLOR_GRAY2BGR)), lut));
+    var out = T(cv.resize(quantized, [640, 360], 0, 0, cv.INTER_NEAREST));
+    for (var j = 0; j < k; j++) {
+        cv.rectangle(out, [12 + j * 26, 320], [34 + j * 26, 342], [result[2].at(j, 0), result[2].at(j, 1), result[2].at(j, 2)], -1);
+        cv.rectangle(out, [12 + j * 26, 320], [34 + j * 26, 342], [255, 255, 255], 1);
+    }
+    return Out(out, ["kmeans K = " + S.From(k), tr(c, "compactness ", "緊密度 ") + S.From(int(result[0]))]);
+};
+
+var portraitLab = function(c) {
+    var st = c.store;
+    var image = st["portraitStill"];
+    var rect = [200, 30, 240, 330];
+    if (st["cut"] == cv.None) {
+        var mask = cv.Mat(360, 640, cv.CV_8UC1, 0);
+        var bg = cv.zeros(1, 65, cv.CV_64F);
+        var fg = cv.zeros(1, 65, cv.CV_64F);
+        cv.grabCut(image, mask, rect, bg, fg, 4, cv.GC_INIT_WITH_RECT);
+        var sure = cv.compare(mask, cv.GC_FGD, cv.CMP_EQ);
+        var maybe = cv.compare(mask, cv.GC_PR_FGD, cv.CMP_EQ);
+        st["cut"] = cv.GaussianBlur(cv.bitwise_or(sure, maybe), [7, 7], 0);
+        mask.delete(); bg.delete(); fg.delete(); sure.delete(); maybe.delete();
+    }
+    var alpha = st["cut"];
+    var k = odd(3 + c.knob * 60);
+    var background = T(cv.GaussianBlur(image, [k, k], 0));
+    var gray = bgr(T(cv.cvtColor(background, cv.COLOR_BGR2GRAY)));
+    background = T(cv.addWeighted(background, 0.4d, gray, 0.6d, -20));
+    var out = background.clone();
+    T(out);
+    var hard = T(cv.threshold(alpha, 127, 255, cv.THRESH_BINARY)[1]);
+    image.copyTo(out, hard);
+    var edges = T(cv.Canny(hard, 50, 150));
+    var glow = T(cv.GaussianBlur(T(cv.dilate(edges, T(cv.getStructuringElement(cv.MORPH_ELLIPSE, [5, 5])))), [0, 0], 3));
+    out = T(cv.add(out, T(cv.merge([glow, T(glow.convertTo(cv.CV_8U, 0.8d)), T(glow.convertTo(cv.CV_8U, 0.2d))]))));
+    return Out(out, ["grabCut GC_INIT_WITH_RECT", tr(c, "background blur ", "背景模糊 ") + S.From(k) + " px"]);
+};
+
+var shift = function(m) {
+    # Swaps quadrants so the zero frequency sits in the middle (numpy's fftshift).
+    var w = m.cols / 2;
+    var h = m.rows / 2;
+    var out = m.clone();
+    T(out);
+    T(m.roi([0, 0, w, h])).copyTo(T(out.roi([w, h, w, h])));
+    T(m.roi([w, h, w, h])).copyTo(T(out.roi([0, 0, w, h])));
+    T(m.roi([w, 0, w, h])).copyTo(T(out.roi([0, h, w, h])));
+    T(m.roi([0, h, w, h])).copyTo(T(out.roi([w, 0, w, h])));
+    return out;
+};
+var fourierLab = function(c) {
+    var g = T(T(cv.resize(gray(c), [256, 256], 0, 0, cv.INTER_AREA)).convertTo(cv.CV_32F));
+    var spectrum = T(cv.dft(g, cv.DFT_COMPLEX_OUTPUT));
+    var planes = cv.split(spectrum);
+    T(planes[0]); T(planes[1]);
+    var magnitude = T(cv.magnitude(planes[0], planes[1]));
+    var logged = T(cv.log(T(cv.add(magnitude, 1))));
+    var view = T(cv.applyColorMap(T(cv.normalize(shift(logged), 0, 255, cv.NORM_MINMAX, cv.CV_8U)), cv.COLORMAP_MAGMA));
+    var radius = 4 + int(c.knob * 120);
+    var keep = T(cv.Mat(256, 256, cv.CV_32FC1, 0));
+    cv.circle(keep, [128, 128], radius, 1, -1);
+    var mask = shift(keep);
+    var filtered = T(cv.idft(T(cv.merge([T(cv.multiply(planes[0], mask)), T(cv.multiply(planes[1], mask))])), cv.DFT_SCALE + cv.DFT_REAL_OUTPUT));
+    cv.circle(view, [128, 128], radius, [255, 255, 255], 1, cv.LINE_AA);
+    var shown = T(cv.normalize(filtered, 0, 255, cv.NORM_MINMAX, cv.CV_8U));
+    var out = pair(view, shown, "dft + log magnitude", "low-pass idft r=" + S.From(radius));
+    return Out(out, ["cv.dft / cv.idft", tr(c, "kept frequencies radius ", "保留頻率半徑 ") + S.From(radius)]);
+};
+
+# ---- Computational photography ------------------------------------------------------------------------------------
+var ARTISTIC = [["stylization", "風格化"], ["pencilSketch", "鉛筆素描"], ["detailEnhance", "細節增強"], ["edgePreservingFilter", "保邊濾波"]];
+var artLab = function(c) {
+    var index = int(P.min(3, c.knob * 4));
+    var small = T(cv.resize(c.frame, [320, 180], 0, 0, cv.INTER_AREA));
+    var result = small;
+    if (index == 0) { result = T(cv.stylization(small, 40, 0.4d)); }
+    else if (index == 1) { var sketch = cv.pencilSketch(small, 40, 0.07d, 0.05d); T(sketch[0]); result = T(sketch[1]); }
+    else if (index == 2) { result = T(cv.detailEnhance(small, 12, 0.2d)); }
+    else { result = T(cv.edgePreservingFilter(small, cv.RECURS_FILTER, 50, 0.5d)); }
+    var out = pair(small, result, "input", "cv." + ARTISTIC[index][0]);
+    return Out(out, [ARTISTIC[index][0] + " / " + ARTISTIC[index][1]]);
+};
+
+var inpaintLab = function(c) {
+    var st = c.store;
+    var small = T(cv.resize(c.frame, [320, 180], 0, 0, cv.INTER_AREA));
+    if (st["scratches"] == cv.None) {
+        var scratches = cv.Mat(180, 320, cv.CV_8UC1, 0);
+        cv.putText(scratches, "AQUA", [40, 120], cv.FONT_HERSHEY_DUPLEX, 3, 255, 9, cv.LINE_AA);
+        cv.line(scratches, [10, 30], [310, 160], 255, 5, cv.LINE_AA);
+        st["scratches"] = scratches;
+    }
+    var scratches = st["scratches"];
+    if (c.down && at(c)) {
+        var x = c.mx / 2;
+        if (x >= 160) { x = x - 160; }
+        cv.circle(scratches, [x * 2, c.my / 2], 6, 255, -1);
+    }
+    if (c.right) { scratches.setTo(0); }
+    var damaged = small.clone();
+    T(damaged);
+    damaged.setTo([255, 255, 255], scratches);
+    var method = cv.INPAINT_TELEA;
+    if (c.knob > 0.5d) { method = cv.INPAINT_NS; }
+    var healed = T(cv.inpaint(damaged, scratches, 5, method));
+    var name = "INPAINT_TELEA";
+    if (method == cv.INPAINT_NS) { name = "INPAINT_NS"; }
+    var out = pair(damaged, healed, "damaged (paint here)", "cv.inpaint " + name);
+    return Out(out, [tr(c, "drag to scratch, right-click to clear", "拖曳加刮痕，右鍵清除"), name]);
+};
+
+# ---- 3D and multi-view --------------------------------------------------------------------------------------------
+var stereoLab = function(c) {
+    var st = c.store;
+    var left = asset(c, "aloeL", "assets/aloeL.jpg", 320, 277);
+    var right = asset(c, "aloeR", "assets/aloeR.jpg", 320, 277);
+    var disparities = 16 * (2 + int(c.knob * 4));
+    if (st["disparityFor"] != disparities) {
+        var matcher = cv.StereoSGBM_create(0, disparities, 5, 8 * 3 * 25, 32 * 3 * 25, 1, 0, 10, 100, 2, cv.STEREO_SGBM_MODE_SGBM_3WAY);
+        var lg = cv.cvtColor(left, cv.COLOR_BGR2GRAY);
+        var rg = cv.cvtColor(right, cv.COLOR_BGR2GRAY);
+        var raw = matcher.compute(lg, rg);
+        if (st["depth"] != cv.None) { st["depth"].delete(); }
+        st["depth"] = cv.applyColorMap(cv.normalize(raw, 0, 255, cv.NORM_MINMAX, cv.CV_8U), cv.COLORMAP_TURBO);
+        st["disparityFor"] = disparities;
+        lg.delete(); rg.delete(); raw.delete();
+    }
+    var out = pair(left, st["depth"], "left camera", "StereoSGBM " + S.From(disparities));
+    var scan = int(180 + 160 * P.sin(c.t * 1.5d));
+    cv.line(out, [0, scan], [640, scan], [255, 255, 255], 1);
+    return Out(out, ["StereoSGBM numDisparities " + S.From(disparities), tr(c, "warm = near, cool = far", "暖色近、冷色遠")]);
+};
+
+var panoramaLab = function(c) {
+    var st = c.store;
+    if (st["pano"] == cv.None) {
+        var city = asset(c, "building", "assets/building.jpg", 600, 400);
+        var leftView = city.roi([0, 0, 400, 400]).clone();
+        var rightView = city.roi([200, 0, 400, 400]).clone();
+        var stitcher = cv.Stitcher_create(cv.Stitcher_SCANS);
+        stitcher.setPanoConfidenceThresh(0.3d);
+        var start = cv.getTickCount();
+        var result = stitcher.stitch([leftView, rightView]);
+        st["panoMs"] = (cv.getTickCount() - start) * 1000.0d / cv.getTickFrequency();
+        st["pano"] = result[1];
+        st["panoStatus"] = result[0];
+        st["views"] = [leftView, rightView];
+    }
+    var top = T(cv.hconcat([fit(st["views"][0], 160, 160), fit(st["views"][1], 160, 160)]));
+    var canvas = T(cv.Mat(360, 640, cv.CV_8UC3, [30, 22, 16]));
+    top.copyTo(canvas.roi([0, 0, 320, 160]));
+    label(canvas, "two overlapping views", 10, 22);
+    if (st["panoStatus"] == cv.Stitcher_OK) {
+        var pano = st["pano"];
+        var scale = P.min(640.0d / pano.cols, 190.0d / pano.rows);
+        var w = int(pano.cols * scale);
+        var h = int(pano.rows * scale);
+        var slide = P.constrain(c.knob * 1.2d, 0, 1);
+        T(cv.resize(pano, [w, h])).copyTo(canvas.roi([(640 - w) / 2, 168, w, h]));
+        cv.rectangle(canvas, [(640 - w) / 2, 168, int(w * slide), h], [0, 255, 255], 2);
+        label(canvas, "Stitcher.stitch", 340, 22);
+    }
+    return Out(canvas, [tr(c, "status ", "狀態 ") + S.From(st["panoStatus"]), fixed(st["panoMs"], 0) + " ms"]);
+};
+
+# ---- Machine learning ---------------------------------------------------------------------------------------------
+var MODELS = [["SVM (RBF)", "支援向量機"], ["KNearest", "K 近鄰"], ["RTrees", "隨機森林"], ["NormalBayesClassifier", "常態貝氏"]];
+var mlLab = function(c) {
+    var st = c.store;
+    if (st["points"] == cv.None) {
+        var points = [];
+        var labels = [];
+        for (var i = 0; i < 40; i++) {
+            var a = i * 0.31d;
+            Arrays.Append(points, [320 + (40 + i * 4) * P.cos(a), 180 + (30 + i * 3) * P.sin(a)]);
+            Arrays.Append(labels, 0);
+            Arrays.Append(points, [320 - (40 + i * 4) * P.cos(a), 180 - (30 + i * 3) * P.sin(a)]);
+            Arrays.Append(labels, 1);
+        }
+        st["points"] = points;
+        st["labels"] = labels;
+        var grid = [];
+        for (var y = 0; y < 36; y++) { for (var x = 0; x < 64; x++) { Arrays.Append(grid, [x * 10 + 5, y * 10 + 5]); } }
+        st["grid"] = cv.Mat(grid).reshape(1, 2304).convertTo(cv.CV_32F);
+        st["dirty"] = true;
+    }
+    if (c.clicked && at(c)) {
+        Arrays.Append(st["points"], [c.mx, c.my]);
+        var group = 0;
+        if (c.right) { group = 1; }
+        Arrays.Append(st["labels"], group);
+        st["dirty"] = true;
+    }
+    var index = int(P.min(3, c.knob * 4));
+    if (st["model"] != index) { st["dirty"] = true; st["model"] = index; }
+    if (st["dirty"]) {
+        var model = cv.SVM_create();
+        if (index == 0) { model.setKernel(cv.SVM_RBF); model.setGamma(0.0004d); model.setC(10); }
+        else if (index == 1) { model = cv.KNearest_create(); model.setDefaultK(5); }
+        else if (index == 2) { model = cv.RTrees_create(); model.setMaxDepth(8); model.setMinSampleCount(2); }
+        else { model = cv.NormalBayesClassifier_create(); }
+        model.train(cv.Mat(st["points"]).reshape(1, len(st["points"])), cv.ROW_SAMPLE, cv.Mat(st["labels"]));
+        var predicted = model.predict(st["grid"])[1];
+        var regions = predicted.reshape(1, 36).convertTo(cv.CV_8U, 255);
+        if (st["regions"] != cv.None) { st["regions"].delete(); }
+        var smooth = cv.resize(regions, [640, 360], 0, 0, cv.INTER_LINEAR);
+        var colorA = cv.Mat(360, 640, cv.CV_8UC3, [120, 60, 30]);
+        var colorB = cv.Mat(360, 640, cv.CV_8UC3, [40, 50, 140]);
+        var picked = cv.threshold(smooth, 127, 255, cv.THRESH_BINARY)[1];
+        colorB.copyTo(colorA, picked);
+        st["regions"] = colorA;
+        predicted.delete(); regions.delete(); smooth.delete(); colorB.delete(); picked.delete();
+        st["dirty"] = false;
+    }
+    var out = st["regions"].clone();
+    T(out);
+    var points = st["points"];
+    for (var p = 0; p < len(points); p++) {
+        var color = [255, 190, 90];
+        if (st["labels"][p] == 1) { color = [90, 110, 255]; }
+        cv.circle(out, points[p], 5, color, -1, cv.LINE_AA);
+        cv.circle(out, points[p], 5, [255, 255, 255], 1, cv.LINE_AA);
+    }
+    return Out(out, ["cv.ml " + MODELS[index][0] + " / " + MODELS[index][1], tr(c, "samples ", "樣本 ") + S.From(len(points)),
+        tr(c, "left click: blue, right click: red", "左鍵藍色、右鍵紅色")]);
+};
+
+# The catalog: key, English and Chinese names, module, knob meaning, and the code a viewer sees.
+var all = [
+    Lab("color", "Color picking", "色彩擷取", "imgproc", "hue", "色相",
+        "var hsv = cv.cvtColor(frame, cv.COLOR_BGR2HSV);\nvar mask = cv.inRange(hsv, [h - 12, 150, 80], [h + 12, 255, 255]);\nframe.copyTo(out, mask);",
+        "變數 色彩 = 視覺.色彩轉換(影格, 視覺.COLOR_BGR2HSV);\n變數 遮罩 = 視覺.範圍遮罩(色彩, [色相 - 12, 150, 80], [色相 + 12, 255, 255]);\n影格.複製到(輸出, 遮罩);", colorLab),
+    Lab("colormap", "Color maps", "偽彩色", "imgproc", "palette", "色盤",
+        "var gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY);\nvar heat = cv.applyColorMap(gray, cv.COLORMAP_TURBO);",
+        "變數 灰階 = 視覺.色彩轉換(影格, 視覺.COLOR_BGR2GRAY);\n變數 熱圖 = 視覺.偽彩色映射(灰階, 視覺.COLORMAP_TURBO);", colormapLab),
+    Lab("smooth", "Smoothing", "平滑濾波", "imgproc", "kernel size", "核心大小",
+        "cv.GaussianBlur(frame, [k, k], 0);\ncv.medianBlur(frame, k);\ncv.bilateralFilter(frame, 15, 80, 80);",
+        "視覺.高斯模糊(影格, [核心, 核心], 0);\n視覺.中值濾波(影格, 核心);\n視覺.雙邊濾波(影格, 15, 80, 80);", smoothLab),
+    Lab("edges", "Neon edges", "霓虹邊緣", "imgproc", "threshold", "門檻",
+        "var edges = cv.Canny(cv.GaussianBlur(gray, [5, 5], 0), t, t * 2.5d);\nvar glow = cv.GaussianBlur(cv.dilate(edges, kernel), [0, 0], 4);\nvar out = cv.add(dimmed, cv.merge([edges, glow, edges]));",
+        "變數 邊緣 = 視覺.Canny邊緣(視覺.高斯模糊(灰階, [5, 5], 0), 門檻, 門檻 * 2.5d);\n變數 光暈 = 視覺.高斯模糊(視覺.膨脹(邊緣, 核心), [0, 0], 4);\n變數 輸出 = 視覺.相加(暗化, 視覺.合併通道([邊緣, 光暈, 邊緣]));", edgeLab),
+    Lab("gradients", "Gradient field", "梯度場", "imgproc", "gain", "增益",
+        "var gx = cv.Sobel(gray, cv.CV_32F, 1, 0);\nvar gy = cv.Sobel(gray, cv.CV_32F, 0, 1);\nvar polar = cv.cartToPolar(gx, gy, true);",
+        "變數 水平 = 視覺.Sobel梯度(灰階, 視覺.CV_32F, 1, 0);\n變數 垂直 = 視覺.Sobel梯度(灰階, 視覺.CV_32F, 0, 1);\n變數 極座標 = 視覺.直角轉極座標(水平, 垂直, 真);", gradientLab),
+    Lab("threshold", "Thresholds", "二值化", "imgproc", "level", "門檻",
+        "var otsu = cv.threshold(gray, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);\nvar local = cv.adaptiveThreshold(gray, 255,\n    cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 21, 4);",
+        "變數 自動 = 視覺.二值化(灰階, 0, 255, 視覺.THRESH_BINARY + 視覺.THRESH_OTSU);\n變數 區域 = 視覺.自適應二值化(灰階, 255,\n    視覺.ADAPTIVE_THRESH_GAUSSIAN_C, 視覺.THRESH_BINARY, 21, 4);", thresholdLab),
+    Lab("morphology", "Morphology", "形態學", "imgproc", "operation", "運算",
+        "var kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, [9, 9]);\nvar out = cv.morphologyEx(binary, cv.MORPH_GRADIENT, kernel, cv.None, 2);",
+        "變數 核心 = 視覺.結構元素(視覺.MORPH_ELLIPSE, [9, 9]);\n變數 輸出 = 視覺.形態學運算(二值, 視覺.MORPH_GRADIENT, 核心, 視覺.無, 2);", morphLab),
+    Lab("shapes", "Contours & shapes", "輪廓與形狀", "imgproc", "approximation", "近似程度",
+        "var found = cv.findContours(mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);\nvar approx = cv.approxPolyDP(contour, 0.03d * cv.arcLength(contour, true), true);\nvar m = cv.moments(contour);",
+        "變數 結果 = 視覺.尋找輪廓(遮罩, 視覺.RETR_EXTERNAL, 視覺.CHAIN_APPROX_SIMPLE);\n變數 近似 = 視覺.多邊形近似(輪廓, 0.03d * 視覺.輪廓周長(輪廓, 真), 真);\n變數 矩 = 視覺.矩(輪廓);", shapeLab),
+    Lab("hough", "Hough transform", "霍夫轉換", "imgproc", "min line length", "最短線段",
+        "var lines = cv.HoughLinesP(edges, 1, cv.CV_PI / 180, 60, 80, 8);\nvar circles = cv.HoughCircles(blurred, cv.HOUGH_GRADIENT, 1, 40, 120, 32, 12, 90);",
+        "變數 直線 = 視覺.機率霍夫直線(邊緣, 1, 視覺.CV_PI / 180, 60, 80, 8);\n變數 圓 = 視覺.霍夫圓(模糊, 視覺.HOUGH_GRADIENT, 1, 40, 120, 32, 12, 90);", houghLab),
+    Lab("corners", "Corners", "角點", "imgproc", "corner count", "角點數",
+        "var corners = cv.goodFeaturesToTrack(gray, 150, 0.01d, 8);\nvar harris = cv.cornerHarris(gray32, 2, 3, 0.04d);",
+        "變數 角點 = 視覺.追蹤特徵點(灰階, 150, 0.01d, 8);\n變數 響應 = 視覺.哈里斯角點(浮點灰階, 2, 3, 0.04d);", cornerLab),
+    Lab("features", "ORB matching", "ORB 特徵匹配", "features2d", "features", "特徵數",
+        "var orb = cv.ORB_create(800);\nvar found = orb.detectAndCompute(gray);\nvar knn = cv.BFMatcher(cv.NORM_HAMMING).knnMatch(a, b, 2);\nvar h = cv.findHomography(from, to, cv.RANSAC, 4);",
+        "變數 偵測器 = 視覺.建立ORB(800);\n變數 特徵 = 偵測器.偵測並計算(灰階);\n變數 匹配 = 視覺.暴力匹配器(視覺.NORM_HAMMING).K近鄰匹配(甲, 乙, 2);\n變數 矩陣 = 視覺.單應性矩陣(來源, 目標, 視覺.RANSAC, 4);", featureLab),
+    Lab("flow", "Optical flow", "光流", "video", "brightness", "亮度",
+        "var flow = cv.calcOpticalFlowFarneback(previous, current, cv.None,\n    0.5d, 3, 15, 3, 5, 1.2d, 0);\nvar polar = cv.cartToPolar(dx, dy, true);",
+        "變數 光流 = 視覺.稠密光流(前一張, 目前, 視覺.無,\n    0.5d, 3, 15, 3, 5, 1.2d, 0);\n變數 極座標 = 視覺.直角轉極座標(水平, 垂直, 真);", flowLab),
+    Lab("background", "Background subtraction", "背景相減", "video", "learning rate", "學習率",
+        "var mog = cv.createBackgroundSubtractorMOG2(300, 24, true);\nvar mask = mog.apply(frame, 0.01d);\nvar model = mog.getBackgroundImage();",
+        "變數 背景 = 視覺.建立MOG2背景相減(300, 24, 真);\n變數 遮罩 = 背景.套用(影格, 0.01d);\n變數 模型 = 背景.背景影像();", backgroundLab),
+    Lab("kalman", "Kalman filter", "卡爾曼濾波", "video", "noise", "雜訊",
+        "var kalman = cv.KalmanFilter(4, 2);\nkalman.predict();\nvar state = kalman.correct([x, y]);",
+        "變數 濾波器 = 視覺.卡爾曼濾波器(4, 2);\n濾波器.預測();\n變數 狀態 = 濾波器.修正([橫, 縱]);", kalmanLab),
+    Lab("tracking", "Object tracking", "物件追蹤", "video", "-", "-",
+        "var tracker = cv.TrackerMIL_create();\ntracker.init(frame, [x, y, w, h]);\nvar result = tracker.update(next);",
+        "變數 追蹤器 = 視覺.建立MIL追蹤器();\n追蹤器.初始化(影格, [橫, 縱, 寬, 高]);\n變數 結果 = 追蹤器.更新(下一張);", trackLab),
+    Lab("faces", "Faces (DNN)", "人臉偵測（DNN）", "objdetect · dnn", "confidence", "信心門檻",
+        "var model = cv.haarcascades + yunetFile;
+var yunet = cv.FaceDetectorYN_create(model, configFile, [640, 360]);
+var faces = yunet.detect(frame)[1];",
+        "變數 模型 = 視覺.人臉模型路徑 + 模型檔名;
+變數 偵測器 = 視覺.建立YuNet人臉偵測器(模型, 設定檔, [640, 360]);
+變數 人臉 = 偵測器.偵測(影格)[1];", faceLab),
+    Lab("codes", "QR & ArUco", "QR 碼與 ArUco", "objdetect", "tilt", "傾斜",
+        "var qr = cv.QRCodeDetector().detectAndDecode(frame);\nvar dict = cv.getPredefinedDictionary(cv.DICT_4X4_50);\nvar markers = cv.ArucoDetector(dict).detectMarkers(frame);",
+        "變數 碼 = 視覺.QR碼偵測器().偵測並解碼(影格);\n變數 字典 = 視覺.預設標記字典(視覺.DICT_4X4_50);\n變數 標記 = 視覺.ArUco偵測器(字典).偵測標記(影格);", codeLab),
+    Lab("ar", "AR pose", "AR 姿態估計", "calib3d", "tilt", "傾斜",
+        "var found = cv.findChessboardCorners(gray, [9, 6]);\nvar pose = cv.solvePnP(objectPoints, found[1], camera, cv.None);\ncv.drawFrameAxes(out, camera, cv.None, pose[1], pose[2], 2);",
+        "變數 結果 = 視覺.尋找棋盤角點(灰階, [9, 6]);\n變數 姿態 = 視覺.姿態估計(物體點, 結果[1], 相機, 視覺.無);\n視覺.繪製座標軸(輸出, 相機, 視覺.無, 姿態[1], 姿態[2], 2);", arLab),
+    Lab("kmeans", "K-means posterize", "K 平均色彩量化", "core", "clusters", "群數",
+        "var samples = small.reshape(1, 14400).convertTo(cv.CV_32F);\nvar result = cv.kmeans(samples, k, cv.None, criteria, 1, cv.KMEANS_PP_CENTERS);\nvar poster = cv.LUT(labels, palette);",
+        "變數 樣本 = 縮圖.重塑(1, 14400).轉換型別(視覺.CV_32F);\n變數 結果 = 視覺.K平均分群(樣本, 群數, 視覺.無, 條件, 1, 視覺.KMEANS_PP_CENTERS);\n變數 海報 = 視覺.查表(標籤, 調色盤);", kmeansLab),
+    Lab("portrait", "GrabCut portrait", "GrabCut 人像", "imgproc", "blur", "模糊",
+        "cv.grabCut(image, mask, [200, 30, 240, 330], bg, fg, 4, cv.GC_INIT_WITH_RECT);\nvar person = cv.bitwise_or(cv.compare(mask, cv.GC_FGD, cv.CMP_EQ),\n    cv.compare(mask, cv.GC_PR_FGD, cv.CMP_EQ));",
+        "視覺.GrabCut前景分割(影像, 遮罩, [200, 30, 240, 330], 背景, 前景, 4, 視覺.GC_INIT_WITH_RECT);\n變數 人物 = 視覺.位元或(視覺.比較(遮罩, 視覺.GC_FGD, 視覺.CMP_EQ),\n    視覺.比較(遮罩, 視覺.GC_PR_FGD, 視覺.CMP_EQ));", portraitLab),
+    Lab("fourier", "Fourier transform", "傅立葉轉換", "core", "radius", "半徑",
+        "var spectrum = cv.dft(gray32, cv.DFT_COMPLEX_OUTPUT);\nvar planes = cv.split(spectrum);\nvar back = cv.idft(filtered, cv.DFT_SCALE + cv.DFT_REAL_OUTPUT);",
+        "變數 頻譜 = 視覺.離散傅立葉轉換(浮點灰階, 視覺.DFT_COMPLEX_OUTPUT);\n變數 平面 = 視覺.分離通道(頻譜);\n變數 還原 = 視覺.反離散傅立葉轉換(濾波, 視覺.DFT_SCALE + 視覺.DFT_REAL_OUTPUT);", fourierLab),
+    Lab("art", "Artistic filters", "藝術濾鏡", "photo", "style", "風格",
+        "var painted = cv.stylization(frame, 40, 0.4d);\nvar sketch = cv.pencilSketch(frame, 40, 0.07d, 0.05d);\nvar crisp = cv.detailEnhance(frame, 12, 0.2d);",
+        "變數 畫作 = 視覺.風格化(影格, 40, 0.4d);\n變數 素描 = 視覺.鉛筆素描(影格, 40, 0.07d, 0.05d);\n變數 銳利 = 視覺.細節增強(影格, 12, 0.2d);", artLab),
+    Lab("inpaint", "Inpainting", "影像修補", "photo", "method", "方法",
+        "damaged.setTo([255, 255, 255], scratches);\nvar healed = cv.inpaint(damaged, scratches, 5, cv.INPAINT_TELEA);",
+        "受損.設定值([255, 255, 255], 刮痕);\n變數 修復 = 視覺.影像修補(受損, 刮痕, 5, 視覺.INPAINT_TELEA);", inpaintLab),
+    Lab("stereo", "Stereo depth", "立體深度", "calib3d", "disparities", "視差數",
+        "var sgbm = cv.StereoSGBM_create(0, 64, 5);\nvar disparity = sgbm.compute(left, right);\nvar depth = cv.applyColorMap(cv.normalize(disparity, 0, 255,\n    cv.NORM_MINMAX, cv.CV_8U), cv.COLORMAP_TURBO);",
+        "變數 匹配器 = 視覺.建立StereoSGBM(0, 64, 5);\n變數 視差 = 匹配器.計算視差(左, 右);\n變數 深度 = 視覺.偽彩色映射(視覺.正規化(視差, 0, 255,\n    視覺.NORM_MINMAX, 視覺.CV_8U), 視覺.COLORMAP_TURBO);", stereoLab),
+    Lab("panorama", "Panorama stitching", "全景拼接", "stitching", "highlight", "標示",
+        "var stitcher = cv.Stitcher_create(cv.Stitcher_SCANS);\nvar result = stitcher.stitch([left, right]);\nif (result[0] == cv.Stitcher_OK) { show(result[1]); }",
+        "變數 拼接器 = 視覺.建立全景拼接器(視覺.Stitcher_SCANS);\n變數 結果 = 拼接器.拼接([左, 右]);\n如果 (結果[0] == 視覺.Stitcher_OK) { 顯示(結果[1]); }", panoramaLab),
+    Lab("ml", "Machine learning", "機器學習", "ml", "model", "模型",
+        "var svm = cv.SVM_create();\nsvm.setKernel(cv.SVM_RBF);\nsvm.train(points, cv.ROW_SAMPLE, labels);\nvar regions = svm.predict(grid)[1];",
+        "變數 模型 = 視覺.建立支援向量機();\n模型.設定核函數(視覺.SVM_RBF);\n模型.訓練(點, 視覺.ROW_SAMPLE, 標籤);\n變數 區域 = 模型.預測(網格)[1];", mlLab)
+];

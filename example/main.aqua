@@ -1,0 +1,322 @@
+# Aqua × OpenCV Vision Lab: 26 live labs covering OpenCV's modules, on a synthetic scene, sample photos or a camera.
+# Keys: Up/Down lab, Left/Right or wheel knob, 1 scene, 2 photos, 3 camera, L English/中文, A autoplay, Space pause.
+# 星泉 × OpenCV 視覺實驗室：26 個即時實驗室，涵蓋 OpenCV 各模組，可使用合成場景、範例照片或攝影機。
+var cv = import("cv");
+var P = import("Processing");
+var Window = import("Window");
+var S = import("String");
+var Network = import("Network");
+var scene = import("scene.aqua");
+var labs = import("labs.aqua");
+
+var LABS = labs.all;
+var VIEW_X = 300;
+var VIEW_Y = 78;
+var VIEW_W = 896;
+var VIEW_H = 504;
+
+var current = 0;
+var knobs = [];
+for (var i = 0; i < len(LABS); i++) {
+    var start = 0.5d;
+    if (LABS[i].key == "color") { start = 0.0d; }
+    knobs = push(knobs, start);
+}
+var stores = {};
+var zh = false;
+var source = "scene";
+var autoplay = false;
+var paused = false;
+var clock = 0.0d;
+var labClock = 0.0d;
+var entered = true;
+var status = "";
+var labMs = 0.0d;
+var notes = [];
+var shown = 0;
+var shownCache = {};
+var shownImages = {};
+var clicked = false;
+var released = false;
+var dragKnob = false;
+var camera = 0;
+var scale = 1.0d;
+var left = 0.0d;
+var top = 0.0d;
+var fontUi = 0;
+var fontBig = 0;
+var fontCode = 0;
+
+# Photos fill 640 x 360 without cropping: the picture sits on a blurred, darkened copy of itself.
+var contain = function(image) {
+    var cover = P.max(640.0d / image.cols, 360.0d / image.rows);
+    var big = cv.resize(image, [int(image.cols * cover) + 1, int(image.rows * cover) + 1]);
+    var x = (big.cols - 640) / 2;
+    var y = (big.rows - 360) / 2;
+    var back = cv.GaussianBlur(big.roi([x, y, 640, 360]), [0, 0], 18);
+    var canvas = back.convertTo(cv.CV_8UC3, 0.45d);
+    var fitScale = P.min(640.0d / image.cols, 360.0d / image.rows);
+    var w = int(image.cols * fitScale);
+    var h = int(image.rows * fitScale);
+    var small = cv.resize(image, [w, h], 0, 0, cv.INTER_AREA);
+    small.copyTo(canvas.roi([(640 - w) / 2, (360 - h) / 2, w, h]));
+    big.delete(); back.delete(); small.delete();
+    return canvas;
+};
+var PHOTOS = ["assets/fruits.jpg", "assets/smarties.png", "assets/sudoku.png", "assets/building.jpg", "assets/butterfly.jpg",
+    "assets/starry_night.jpg", "/bottles/Aqua_OpenCV/assets/portrait.jpg", "assets/box_in_scene.png"];
+var photos = [];
+var portrait = 0;
+
+# A slow pan and zoom keeps photos moving, so motion labs (flow, background, tracking) work on them too.
+var kenBurns = function(image, t) {
+    var zoom = 1.06d + 0.05d * P.sin(t * 0.35d);
+    var m = cv.getRotationMatrix2D([320 + 25 * P.sin(t * 0.21d), 180 + 15 * P.cos(t * 0.27d)], 1.5d * P.sin(t * 0.3d), zoom);
+    var moved = cv.warpAffine(image, m, [640, 360], cv.INTER_LINEAR, cv.BORDER_REFLECT);
+    m.delete();
+    return moved;
+};
+
+var tr = function(en, chinese) { if (zh) { return chinese; } return en; };
+
+var openCamera = function() {
+    if (camera != 0) { source = "camera"; return 0; }
+    var attempt = Network.Try(function() {
+        var module = 0;
+        if (isOSAndroid()) { module = import("Camera"); } else { module = import("Webcam"); }
+        if (!module.是否支援()) { return 0; }
+        camera = module.開啟("", 640, 480, 30);
+        return 1;
+    });
+    if (camera != 0) { source = "camera"; status = ""; }
+    else { status = tr("No camera available here: showing the live scene.", "此裝置無法使用攝影機，改用即時場景。"); }
+    return 0;
+};
+
+var frameFor = function(t) {
+    if (source == "camera" && camera != 0) {
+        var attempt = Network.Try(function() {
+            var image = cv.fromImage(camera.擷取影格().影像);
+            var framed = contain(image);
+            image.delete();
+            return framed;
+        });
+        if (attempt.Success) { return attempt.Value; }
+        camera = 0;
+        source = "scene";
+        status = tr("The camera stopped: back to the live scene.", "攝影機已停止，回到即時場景。");
+    }
+    if (source == "photo") {
+        var index = int(t / 8) % len(photos);
+        return kenBurns(photos[index], t);
+    }
+    return scene.render(t);
+};
+
+var selectLab = function(index) {
+    current = (index + len(LABS)) % len(LABS);
+    labClock = 0.0d;
+    entered = true;
+};
+
+var setup = function() {
+    P.size(1280, 720, P.P2D, "Aqua × OpenCV Vision Lab");
+    P.frameRate(30);
+    fontUi = P.createFont("sans-serif", 14);
+    fontBig = P.createFont("sans-serif", 26);
+    fontCode = P.createFont("monospace", 13);
+    for (var i = 0; i < len(PHOTOS); i++) {
+        var image = cv.imread(PHOTOS[i]);
+        photos = push(photos, contain(image));
+        image.delete();
+    }
+    portrait = photos[6];
+    P.on("keyPressed", function() {
+        var k = P.keyCode;
+        if (k == 265) { selectLab(current - 1); }
+        if (k == 264) { selectLab(current + 1); }
+        if (k == 263) { knobs[current] = P.max(0, knobs[current] - 0.05d); }
+        if (k == 262) { knobs[current] = P.min(1, knobs[current] + 0.05d); }
+        if (k == 49) { source = "scene"; }
+        if (k == 50) { source = "photo"; }
+        if (k == 51) { openCamera(); }
+        if (k == 76) { zh = !zh; }
+        if (k == 65) { autoplay = !autoplay; labClock = 0.0d; }
+        if (k == 32) { paused = !paused; }
+    });
+    P.on("mousePressed", function() {
+        var x = (P.mouseX - left) / scale;
+        var y = (P.mouseY - top) / scale;
+        if (x < 280 && y > 78) {
+            var row = int((y - 86) / 23);
+            if (row >= 0 && row < len(LABS)) { selectLab(row); autoplay = false; }
+        } else if (y < 64 && x > 760) {
+            if (x < 850) { source = "scene"; } else if (x < 940) { source = "photo"; } else if (x < 1030) { openCamera(); }
+            else if (x < 1110) { zh = !zh; } else { autoplay = !autoplay; labClock = 0.0d; }
+        } else if (y > 588 && y < 612 && x >= VIEW_X && x <= VIEW_X + VIEW_W) {
+            dragKnob = true;
+        } else {
+            clicked = true;
+        }
+    });
+    P.on("mouseReleased", function() { released = true; dragKnob = false; });
+    P.on("mouseWheel", function() { knobs[current] = P.constrain(knobs[current] - P.wheelCount * 0.03d, 0, 1); });
+};
+
+var drawCard = function(x, y, w, h, radius) { P.noStroke(); P.fill(18, 26, 40); P.rect(x, y, w, h, radius); };
+var chip = function(text, x, y, w, active) {
+    P.noStroke();
+    if (active) { P.fill(46, 214, 189); } else { P.fill(30, 42, 61); }
+    P.rect(x, y, w, 30, 15);
+    if (active) { P.fill(8, 20, 28); } else { P.fill(190, 205, 222); }
+    P.textSize(13);
+    P.textAlign(P.CENTER);
+    P.text(text, x + w / 2, y + 20);
+    P.textAlign(P.LEFT);
+};
+
+# The lab's picture, scaled into the view; one reusable Processing image per output size.
+# The image objects are reused too: the collector does not see their pixels, so one per frame would pile up.
+var show = function(out) {
+    var key = S.From(out.cols) + "x" + S.From(out.rows);
+    var target = shownCache[key];
+    if (target == cv.None) {
+        var image = out.toImage();
+        target = Window.ToProcessingImage(image);
+        shownCache[key] = target;
+        shownImages[key] = image;
+    } else {
+        Window.ToProcessingImage(out.toImage(shownImages[key]), target);
+    }
+    var fitScale = P.min(VIEW_W / (out.cols * 1.0d), VIEW_H / (out.rows * 1.0d));
+    var w = out.cols * fitScale;
+    var h = out.rows * fitScale;
+    P.image(target, VIEW_X + (VIEW_W - w) / 2, VIEW_Y + (VIEW_H - h) / 2, w, h);
+};
+
+var draw = function() {
+    var dt = 1.0d / 30;
+    if (!paused) { clock += dt; labClock += dt; }
+    if (autoplay) {
+        knobs[current] = 0.5d + 0.45d * P.sin(labClock * 1.3d);
+        if (labClock > 7) { selectLab(current + 1); }
+    }
+    scale = P.min(P.width / 1280.0d, P.height / 720.0d);
+    left = (P.width - 1280 * scale) / 2;
+    top = (P.height - 720 * scale) / 2;
+    var mx = (P.mouseX - left) / scale;
+    var my = (P.mouseY - top) / scale;
+    if (dragKnob) { knobs[current] = P.constrain((mx - VIEW_X) / VIEW_W, 0, 1); }
+
+    var lab = LABS[current];
+    if (stores[lab.key] == cv.None) { stores[lab.key] = {}; }
+    var store = stores[lab.key];
+    var frame = frameFor(clock);
+    if (lab.key == "faces") {
+        if (store["portraitFrame"] != cv.None) { store["portraitFrame"].delete(); }
+        store["portraitFrame"] = kenBurns(portrait, clock);
+    }
+    if (lab.key == "portrait") { store["portraitStill"] = portrait; }
+    # Mouse position in the 640 x 360 picture (-1 outside the view).
+    var ix = (mx - VIEW_X) * 640.0d / VIEW_W;
+    var iy = (my - VIEW_Y) * 360.0d / VIEW_H;
+    if (ix < 0 || iy < 0 || ix >= 640 || iy >= 360) { ix = -1; iy = -1; }
+    var c = labs.Ctx(frame, clock, knobs[current], -1, ix, iy, P.isMousePressed && !dragKnob, clicked, released,
+        P.mouseButton == 1, zh, store, entered, source);
+    var start = currentTime();
+    var result = labs.Out(frame, []);
+    var attempt = Network.Try(function() { return lab.run(c); });
+    labMs = labMs * 0.85d + (currentTime() - start) * 0.15d;
+    if (attempt.Success) { result = attempt.Value; notes = result.notes; }
+    else { notes = [tr("Error: ", "錯誤：") + attempt.Error.Message]; labs.flush(); }
+    if (c.knobSet >= 0) { knobs[current] = c.knobSet; }
+    clicked = false;
+    released = false;
+    entered = false;
+
+    P.background(9, 14, 24);
+    P.pushMatrix();
+    P.translate(left, top);
+    P.scale(scale);
+    P.textFont(fontUi);
+
+    # Header.
+    P.noStroke();
+    P.fill(13, 20, 33);
+    P.rect(0, 0, 1280, 64);
+    P.fill(46, 214, 189);
+    P.textSize(12);
+    P.text(tr("AQUARIUSLANG  ×  OPENCV 4.12", "星泉  ×  OPENCV 4.12"), 24, 24);
+    P.textFont(fontBig);
+    P.fill(236, 243, 250);
+    P.textSize(24);
+    P.text(tr("Vision Lab", "視覺實驗室"), 24, 52);
+    P.textFont(fontUi);
+    chip(tr("Scene", "場景"), 760, 17, 84, source == "scene");
+    chip(tr("Photos", "照片"), 850, 17, 84, source == "photo");
+    chip(tr("Camera", "攝影機"), 940, 17, 84, source == "camera");
+    chip("EN / 中文", 1030, 17, 74, zh);
+    chip(tr("Autoplay", "自動播放"), 1110, 17, 150, autoplay);
+
+    # Lab list.
+    drawCard(12, 76, 268, 632, 14);
+    for (var i = 0; i < len(LABS); i++) {
+        var y = 86 + i * 23;
+        if (i == current) { P.fill(37, 92, 104); P.rect(18, y, 256, 22, 6); }
+        P.fill(84, 108, 134);
+        P.textSize(10);
+        P.text(LABS[i].module, 200, y + 15);
+        if (i == current) { P.fill(255, 255, 255); } else { P.fill(184, 200, 218); }
+        P.textSize(13);
+        var name = LABS[i].en;
+        if (zh) { name = LABS[i].zh; }
+        P.text(S.From(i + 1) + "  " + name, 26, y + 16);
+    }
+
+    # The picture.
+    drawCard(VIEW_X - 8, VIEW_Y - 8, VIEW_W + 16, VIEW_H + 16, 14);
+    show(result.image);
+    labs.flush();
+    if (result.image != frame) { result.image.delete(); }
+    frame.delete();
+
+    # Knob.
+    var knob = knobs[current];
+    P.fill(30, 42, 61);
+    P.rect(VIEW_X, 597, VIEW_W, 6, 3);
+    P.fill(46, 214, 189);
+    if (knob > 0.01d) { P.rect(VIEW_X, 597, VIEW_W * knob, 6, 3); }
+    P.circle(VIEW_X + VIEW_W * knob, 600, 16);
+    P.fill(150, 170, 192);
+    P.textSize(12);
+    var knobName = lab.knobEn;
+    if (zh) { knobName = lab.knobZh; }
+    P.text(knobName, VIEW_X, 590);
+
+    # Code and live numbers.
+    drawCard(VIEW_X - 8, 620, 600, 88, 12);
+    P.textFont(fontCode);
+    var code = lab.codeEn;
+    if (zh) { code = lab.codeZh; }
+    var lines = S.Split(code, "\n");
+    for (var l = 0; l < len(lines) && l < 4; l++) {
+        P.fill(98, 120, 146);
+        P.text(S.From(l + 1), VIEW_X + 2, 642 + l * 18);
+        P.fill(214, 228, 242);
+        P.text(lines[l], VIEW_X + 24, 642 + l * 18);
+    }
+    P.textFont(fontUi);
+    drawCard(VIEW_X + 604, 620, VIEW_W - 596, 88, 12);
+    P.fill(46, 214, 189);
+    P.textSize(13);
+    var title = lab.en;
+    if (zh) { title = lab.zh; }
+    P.text(title + "  ·  " + S.From(int(labMs * 10) / 10.0d) + " ms", VIEW_X + 618, 642);
+    P.fill(190, 205, 222);
+    P.textSize(12);
+    for (var n = 0; n < len(notes) && n < 3; n++) { P.text(notes[n], VIEW_X + 618, 662 + n * 17); }
+    if (status != "") { P.fill(255, 190, 90); P.text(status, 300, 714); }
+    P.popMatrix();
+};
+
+P.run(setup, draw);

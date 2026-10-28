@@ -1,0 +1,56 @@
+# The live synthetic scene: a deterministic 640 x 360 animation drawn with OpenCV itself, so every lab has motion,
+# edges, corners, circles, lines, colors and texture to work on, even without a camera.
+# 即時合成場景：以 OpenCV 繪製的 640 x 360 動畫，沒有攝影機也能提供動態、邊緣、角點、圓形、直線、色彩與紋理。
+var cv = import("cv");
+var P = import("Processing");
+
+var WIDTH = 640;
+var HEIGHT = 360;
+
+# The static backdrop: a night gradient, a perspective floor grid and a textured poster.
+var backdrop = cv.Mat(HEIGHT, WIDTH, cv.CV_8UC3, [0, 0, 0]);
+for (var y = 0; y < HEIGHT; y++) {
+    var k = y / (HEIGHT * 1.0d);
+    cv.line(backdrop, [0, y], [WIDTH, y], [58 + 46 * k, 36 + 34 * k, 28 + 24 * k], 1);
+}
+for (var i = -8; i <= 8; i++) {
+    cv.line(backdrop, [320 + i * 22, 250], [320 + i * 90, 360], [120, 92, 60], 1, cv.LINE_AA);
+}
+for (var j = 0; j < 5; j++) {
+    var row = 250 + j * j * 5;
+    cv.line(backdrop, [0, row], [WIDTH, row], [120, 92, 60], 1, cv.LINE_AA);
+}
+cv.setRNGSeed(2026);
+var noise = cv.Mat(110, 150, cv.CV_8UC3, [0, 0, 0]);
+cv.randu(noise, [0, 0, 0], [255, 255, 255]);
+noise = cv.GaussianBlur(noise, [5, 5], 0);
+noise.copyTo(backdrop.roi([462, 22, 150, 110]));
+cv.rectangle(backdrop, [460, 20], [613, 133], [240, 240, 240], 2);
+cv.putText(backdrop, "AQUARIUS x OPENCV", [24, 344], cv.FONT_HERSHEY_DUPLEX, 0.7d, [235, 235, 235], 1, cv.LINE_AA);
+
+# Where the moving red ball is at time t (seconds): labs that track it compare against this.
+var ball = function(t) {
+    return [320 + 210 * P.sin(t * 1.1d), 175 + 70 * P.sin(t * 1.7d + 0.6d)];
+};
+
+var polygon = function(cx, cy, radius, sides, angle) {
+    var points = [];
+    for (var n = 0; n < sides; n++) {
+        var a = angle + n * 6.283185307d / sides;
+        points = push(points, [cx + radius * P.cos(a), cy + radius * P.sin(a)]);
+    }
+    return points;
+};
+
+# The frame at time t, as a new BGR Mat.
+var render = function(t) {
+    var frame = backdrop.clone();
+    cv.circle(frame, [118, 112], 46, [90, 230, 120], 6, cv.LINE_AA);
+    cv.fillPoly(frame, [polygon(120, 250, 52, 4, t * 0.8d)], [40, 200, 255], cv.LINE_AA);
+    cv.fillPoly(frame, [polygon(520, 255, 44, 3, -t * 1.2d)], [255, 150, 60], cv.LINE_AA);
+    cv.fillPoly(frame, [polygon(250, 80, 30, 6, t * 0.5d)], [220, 90, 240], cv.LINE_AA);
+    var b = ball(t);
+    cv.circle(frame, b, 30, [40, 40, 235], -1, cv.LINE_AA);
+    cv.circle(frame, [b[0] - 9, b[1] - 10], 8, [170, 170, 255], -1, cv.LINE_AA);
+    return frame;
+};
